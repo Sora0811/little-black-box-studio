@@ -1,0 +1,46 @@
+{
+  "spec": "chara_card_v3",
+  "spec_version": "3.0",
+  "data": {
+    "name": "Seraphina",
+    "description": "A synthetic guide used only for automated regression checks. She inventories invented landmarks and records fictional weather for a map. She inventories invented landmarks and records fictional weather for a map. She inventories invented landmarks and records fictional weather for a map. She inventories invented landmarks and records fictional weather for a map. She inventories invented landmarks and records fictional weather for a map. She inventories invented landmarks and records fictional weather for a map. She inventories invented landmarks and records fictional weather for a map. She inventories invented landmarks and records fictional weather for a map. She inventories invented landmarks and records fictional weather for a map. She inventories invented landmarks and records fictional weather for a map. She inventories invented landmarks and records fictional weather for a map. She inventories invented landmarks and records fictional weather for a map. She inventories invented landmarks and records fictional weather for a map. She inventories invented landmarks and records fictional weather for a map. She inventories invented landmarks and records fictional weather for a map. ",
+    "first_mes": "Welcome to the test archive.",
+    "character_book": {
+      "entries": [
+        {
+          "comment": "eldoria",
+          "keys": [
+            "Eldoria"
+          ],
+          "content": "This is synthetic world lore for a regression test. The atlas catalogues a fictional site with a detailed history and several invented landmarks. This is synthetic world lore for a regression test. The atlas catalogues a fictional site with a detailed history and several invented landmarks. This is synthetic world lore for a regression test. The atlas catalogues a fictional site with a detailed history and several invented landmarks. This is synthetic world lore for a regression test. The atlas catalogues a fictional site with a detailed history and several invented landmarks. This is synthetic world lore for a regression test. The atlas catalogues a fictional site with a detailed history and several invented landmarks. ",
+          "enabled": true
+        },
+        {
+          "comment": "shadowfang",
+          "keys": [
+            "shadowfang"
+          ],
+          "content": "This is synthetic world lore for a regression test. The atlas catalogues a fictional site with a detailed history and several invented landmarks. This is synthetic world lore for a regression test. The atlas catalogues a fictional site with a detailed history and several invented landmarks. This is synthetic world lore for a regression test. The atlas catalogues a fictional site with a detailed history and several invented landmarks. This is synthetic world lore for a regression test. The atlas catalogues a fictional site with a detailed history and several invented landmarks. This is synthetic world lore for a regression test. The atlas catalogues a fictional site with a detailed history and several invented landmarks. ",
+          "enabled": true
+        },
+        {
+          "comment": "glade",
+          "keys": [
+            "glade"
+          ],
+          "content": "This is synthetic world lore for a regression test. The atlas catalogues a fictional site with a detailed history and several invented landmarks. This is synthetic world lore for a regression test. The atlas catalogues a fictional site with a detailed history and several invented landmarks. This is synthetic world lore for a regression test. The atlas catalogues a fictional site with a detailed history and several invented landmarks. This is synthetic world lore for a regression test. The atlas catalogues a fictional site with a detailed history and several invented landmarks. This is synthetic world lore for a regression test. The atlas catalogues a fictional site with a detailed history and several invented landmarks. ",
+          "enabled": true
+        },
+        {
+          "comment": "magic",
+          "keys": [
+            "magic",
+            "power"
+          ],
+          "content": "This is synthetic world lore for a regression test. The atlas catalogues a fictional site with a detailed history and several invented landmarks. This is synthetic world lore for a regression test. The atlas catalogues a fictional site with a detailed history and several invented landmarks. This is synthetic world lore for a regression test. The atlas catalogues a fictional site with a detailed history and several invented landmarks. This is synthetic world lore for a regression test. The atlas catalogues a fictional site with a detailed history and several invented landmarks. This is synthetic world lore for a regression test. The atlas catalogues a fictional site with a detailed history and several invented landmarks. ",
+          "enabled": true
+        }
+      ]
+    }
+  }
+}

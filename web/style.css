@@ -1,0 +1,28 @@
+* { box-sizing: border-box; }
+:root { color-scheme: dark; font: 16px/1.55 "Instrument Sans", "Microsoft JhengHei", sans-serif; background: #141618; color: #f1eee5; }
+body { margin: auto; max-width: 1120px; padding: 2rem clamp(1rem, 4vw, 3rem); }
+header { border-bottom: 1px solid #3b4143; margin-bottom: 1.5rem; }
+h1 { font-size: clamp(2rem, 6vw, 3.5rem); line-height: 1.1; margin: 0; letter-spacing: -.04em; }
+h1 span { display: block; color: #c4e498; font-size: .43em; letter-spacing: .05em; margin-top: .65rem; }
+header p, .note, #status, #world-name { color: #bdc6bf; }
+main { display: grid; grid-template-columns: minmax(0, .88fr) minmax(0, 1.12fr); gap: 1rem; align-items: start; }
+section { border: 1px solid #3b4143; background: #202425; border-radius: 14px; padding: 1.25rem; }
+h2 { font-size: 1.15rem; margin: 0 0 .75rem; }
+fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+label { display: grid; gap: .3rem; margin-bottom: .75rem; }
+input, textarea, select, button { font: inherit; color: inherit; }
+input, textarea, select { min-width: 0; width: 100%; padding: .5rem .65rem; background: #171a1b; border: 1px solid #626c67; border-radius: 6px; }
+textarea { resize: vertical; }
+button { padding: .4rem .8rem; background: #2b3230; border: 1px solid #626c67; border-radius: 6px; cursor: pointer; }
+.primary { background: #c4e498; color: #16200e; font-weight: 700; }
+button:disabled { opacity: .55; cursor: default; }
+:focus-visible { outline: 2px solid #c4e498; outline-offset: 2px; }
+.actions { display: flex; align-items: center; justify-content: space-between; gap: .65rem; flex-wrap: wrap; margin-bottom: .75rem; }
+.actions h2, .upload { margin: 0; }
+.upload input { font-size: .85rem; }
+#messages { min-height: 12rem; max-height: 55vh; overflow: auto; list-style: none; padding: 0; }
+#messages li { padding: .65rem .8rem; margin: .5rem 0; border-radius: 8px; background: #313937; overflow-wrap: anywhere; }
+#messages li[data-role="user"] { background: #373c2d; }
+#messages p { margin: .2rem 0 0; white-space: pre-wrap; }
+.note { font-size: .875rem; }
+@media (max-width: 720px) { main { grid-template-columns: 1fr; } }

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>小黑盒 Discord 角色工作室</title>
+<link rel="stylesheet" href="/style.css">
+<script type="module" src="/app.js"></script>
+</head>
+<body>
+<header><h1>小黑盒<span>Discord 角色工作室</span></h1><p>建立性格、選擇模型，開始和你的角色試聊。</p></header>
+<main>
+<section aria-labelledby="setup-title">
+<h2 id="setup-title">角色設定</h2>
+<form id="setup">
+<fieldset id="settings">
+<div class="actions"><button id="sample" type="button">載入範例</button><label class="upload">匯入角色卡<input id="card-file" type="file" accept=".json,.png"></label></div>
+<label>角色名稱<input name="name" required maxlength="200"></label>
+<label>描述<textarea name="description" required rows="3"></textarea></label>
+<label>性格<textarea name="personality" rows="2"></textarea></label>
+<label>場景<textarea name="scenario" rows="2"></textarea></label>
+<label>開場白<textarea name="first_mes" rows="2"></textarea></label>
+<label>附加世界書（JSON）<input id="world-file" type="file" accept=".json"></label>
+<p id="world-name"></p><div class="actions"><button id="clear-world" type="button">移除附加世界書</button><button id="new-card" type="button">新建角色</button><button id="export-card" type="button">下載角色卡</button></div>
+<h2>模型</h2>
+<label>服務<select name="provider"><option value="ollama">Ollama</option><option value="openai">OpenAI-compatible</option></select></label>
+<label>網址<input name="endpoint" type="url" value="http://127.0.0.1:11434" required></label>
+<label>模型名稱<input name="model" placeholder="輸入服務已安裝的模型名稱" required maxlength="200"></label>
+<button class="primary" type="submit">套用設定</button>
+</fieldset>
+</form>
+</section>
+<section class="chat" aria-labelledby="chat-title">
+<div class="actions"><h2 id="chat-title">網頁試聊</h2><button id="reset" type="button" disabled>清除對話</button></div>
+<p id="status" role="status">請先填寫設定，或載入合成範例。</p>
+<ol id="messages" aria-label="對話紀錄"></ol>
+<form id="chat"><label>你的訊息<textarea id="message" rows="2" required maxlength="8000" disabled></textarea></label><button id="send" class="primary" disabled>送出</button></form>
+<p class="note">Discord 為選配。進階 CLI 與 REST Bridge 的設定方式請見 README。</p>
+</section>
+</main>
+</body>
+</html>

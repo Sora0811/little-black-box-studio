@@ -1,0 +1,50 @@
+{
+  "character": {
+    "card": "examples/characters/lighthouse.json",
+    "world": null,
+    "userName": "User"
+  },
+  "model": {
+    "provider": "ollama",
+    "endpoint": "http://127.0.0.1:11434",
+    "model": "YOUR_MODEL_NAME",
+    "temperature": 0.7,
+    "maxTokens": 480,
+    "contextBudget": 8192,
+    "timeoutMs": 180000
+  },
+  "prompt": {
+    "systemPrompt": null,
+    "postHistoryInstructions": null,
+    "includeFirstMessage": true,
+    "includeExamples": false
+  },
+  "worldInfo": {
+    "enabled": true,
+    "scanDepth": 2,
+    "budgetPercent": 25,
+    "budgetCapTokens": 0,
+    "recursive": false,
+    "wholeWord": false,
+    "maxRecursionSteps": 2,
+    "caseSensitive": false
+  },
+  "history": {
+    "dir": "data/history",
+    "maxTurns": 20
+  },
+  "discord": {
+    "provider": "tupperbox",
+    "endpoint": "http://127.0.0.1:8787",
+    "memberId": 1,
+    "channelId": null,
+    "maxLength": 2000,
+    "sanitizeMentions": true,
+    "timeoutMs": 20000,
+    "token": null,
+    "tokenFile": null
+  },
+  "outbox": {
+    "dir": "data/outbox"
+  }
+}

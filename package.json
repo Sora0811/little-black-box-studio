@@ -1,0 +1,16 @@
+{
+  "name": "little-black-box-studio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/web.js",
+    "cli": "node src/cli.js",
+    "bridge": "node tools/bridge.mjs",
+    "test": "node tests/run-tests.mjs && node tests/bridge-tests.mjs && node --test tests/web.test.mjs"
+  },
+  "license": "MIT"
+}
