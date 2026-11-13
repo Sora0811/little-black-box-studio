@@ -7,13 +7,14 @@ import { loadCard } from './card.js';
 import { mergeBooks } from './worldbook.js';
 import { buildPrompt } from './prompt.js';
 import { generateReply } from './model.js';
-import { sendMessage, DeliveryError } from './tupperbox.js';
+import { DeliveryError } from './tupperbox.js';
+import { createSender, historyMemberId } from './delivery.js';
 import { loadHistory, saveHistory, appendMessages, resetHistory, ensureFirstMessage, historyStats } from './history.js';
 import { sanitizeMentions, truncateForDiscord } from './mentions.js';
 import { stripCharacterPrefix } from './macros.js';
 import { log, setLogLevel } from './logger.js';
 
-const HELP = `rp-engine — SillyTavern 角色卡 → 模型 → Tupperbox 代理
+const HELP = `rp-engine — SillyTavern 角色卡 → 模型 → Discord（webhook 或 Tupperbox 代理）
 
 用法：
   node src/cli.js --message "..."                 預覽（只生成，不發送）
@@ -29,20 +30,25 @@ const HELP = `rp-engine — SillyTavern 角色卡 → 模型 → Tupperbox 代�
   --config <path>        設定檔（預設 config.json）
   --character <path>     覆寫角色卡（.json 或 .png）
   --world <path>         覆寫／附加獨立世界書（ST world JSON 或 V3 character_book）
-  --member-id <n>        覆寫 Tupperbox memberId
+  --provider <name>      發送方式：webhook（預設）或 tupperbox
+  --webhook <url>        覆寫頻道 webhook 網址（provider=webhook 時）
+  --member-id <n>        覆寫 Tupperbox memberId（provider=tupperbox 時）
   --channel-id <id>      覆寫 Discord channelId
   --json                 以 JSON 輸出結果（適合腳本與測試）
   --log-level <level>    error | warn | info | debug（預設 info）
 
 環境變數：
-  TUPPERBOX_API_TOKEN      Tupperbox 代理 Bearer token（建議）
+  DISCORD_WEBHOOK_URL      頻道 webhook 網址（provider=webhook，建議用環境變數或檔案）
+  DISCORD_WEBHOOK_URL_FILE 含 webhook 網址的檔案路徑（第一行）
+  TUPPERBOX_API_TOKEN      Tupperbox 代理 Bearer token（provider=tupperbox）
   TUPPERBOX_TOKEN_FILE     含 token 的檔案路徑（第一行）
-  RP_CARD / RP_WORLD / RP_MEMBER_ID / RP_CHANNEL_ID / RP_MODEL_ENDPOINT / RP_MODEL_NAME
+  RP_DISCORD_PROVIDER / RP_CARD / RP_WORLD / RP_MEMBER_ID / RP_CHANNEL_ID
+  RP_MODEL_ENDPOINT / RP_MODEL_NAME
 `;
 
 function parseArgs(argv) {
     const options = { preview: true };
-    const need = new Set(['config', 'character', 'world', 'message', 'message-file', 'member-id', 'channel-id', 'log-level', 'retry']);
+    const need = new Set(['config', 'character', 'world', 'message', 'message-file', 'member-id', 'channel-id', 'log-level', 'retry', 'provider', 'webhook']);
 
     for (let index = 0; index < argv.length; index += 1) {
         const arg = argv[index];
@@ -85,14 +91,8 @@ function writeOutbox(config, payload) {
 
 async function handleRetry(file, config, options) {
     const payload = JSON.parse(fs.readFileSync(path.resolve(file), 'utf8').replace(/^\uFEFF/, ''));
-    const result = await sendMessage({
-        endpoint: config.discord.endpoint,
-        token: config.discord.token,
-        memberId: payload.memberId ?? config.discord.memberId,
-        channelId: payload.channelId ?? config.discord.channelId,
-        content: payload.content,
-        timeoutMs: config.discord.timeoutMs,
-    });
+    const sender = createSender({ config, card: { name: payload.character ?? 'Character' } });
+    const result = await sender(payload.content);
 
     fs.renameSync(path.resolve(file), `${path.resolve(file)}.sent`);
     output({ ok: true, retried: path.basename(file), messageId: result.messageId, channelId: result.channelId }, options,
@@ -114,6 +114,10 @@ async function main() {
         world: options.world,
         memberId: options['member-id'] ? Number(options['member-id']) : undefined,
         channelId: options['channel-id'],
+        provider: options.provider,
+        webhookUrl: options.webhook,
+        // Preview and history-only runs must work before Discord is configured.
+        requireDelivery: options.preview !== true || Boolean(options.retry),
     });
 
     if (options['log-level']) setLogLevel(options['log-level']);
@@ -130,17 +134,18 @@ async function main() {
         ? JSON.parse(fs.readFileSync(config.character.world, 'utf8').replace(/^\uFEFF/, ''))
         : null;
     const book = mergeBooks(card.book, extraBook);
+    const historyId = historyMemberId(config, card);
 
     const { store, file } = loadHistory({
         dir: config.history.dir,
-        memberId: config.discord.memberId,
+        memberId: historyId,
         channelId: config.discord.channelId,
         character: card.name,
     });
 
     if (options.reset) {
-        resetHistory({ dir: config.history.dir, memberId: config.discord.memberId, channelId: config.discord.channelId, character: card.name });
-        const fresh = loadHistory({ dir: config.history.dir, memberId: config.discord.memberId, channelId: config.discord.channelId, character: card.name });
+        resetHistory({ dir: config.history.dir, memberId: historyId, channelId: config.discord.channelId, character: card.name });
+        const fresh = loadHistory({ dir: config.history.dir, memberId: historyId, channelId: config.discord.channelId, character: card.name });
         ensureFirstMessage(fresh.store, card, { enabled: config.prompt.includeFirstMessage });
         saveHistory({ dir: config.history.dir, store: fresh.store });
         output({ ok: true, reset: true, character: card.name, historyFile: fresh.file }, options,
@@ -243,14 +248,8 @@ async function main() {
     }
 
     try {
-        const delivery = await sendMessage({
-            endpoint: config.discord.endpoint,
-            token: config.discord.token,
-            memberId: config.discord.memberId,
-            channelId: config.discord.channelId,
-            content: clean.text,
-            timeoutMs: config.discord.timeoutMs,
-        });
+        const sender = createSender({ config, card });
+        const delivery = await sender(clean.text);
 
         output({ ...summary, sent: true, messageId: delivery.messageId, channelId: delivery.channelId }, options,
             [
@@ -266,7 +265,7 @@ async function main() {
         const outboxFile = writeOutbox(config, {
             createdAt: new Date().toISOString(),
             character: card.name,
-            memberId: config.discord.memberId,
+            memberId: historyId,
             channelId: config.discord.channelId,
             content: clean.text,
             error: { code: error.code, status: error.status, message: error.message, detail: error.detail },
@@ -283,6 +282,9 @@ async function main() {
         [
             `生成成功但發送失敗：${error.message}`,
             `訊息已保留在 outbox：${outboxFile}`,
+            error.ambiguous
+                ? 'Discord 可能已收到這則訊息：重送前先確認頻道，避免重複。'
+                : '重送前也請確認頻道未出現該訊息。',
             '修正後可重送：node src/cli.js --retry ' + outboxFile,
             '',
             clean.text,

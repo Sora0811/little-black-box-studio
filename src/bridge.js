@@ -3,7 +3,8 @@
  *
  * Polls one channel over REST, decides whether a message is addressed to the
  * character, generates a reply through the existing prompt/model pipeline and
- * posts it through the existing Tupperbox proxy. Two modes:
+ * posts it with the configured delivery provider (channel webhook by default,
+ * Tupperbox proxy as a legacy option). Two modes:
  *
  *   prefix  — only messages starting with the configured prefix
  *   natural — any message from an allowed user in the allowed channel
@@ -156,8 +157,9 @@ export function saveState(file, state) {
  * @param {string} deps.statePath
  * @param {string} deps.pendingDir
  */
-export function createBridge({ config, card, book, api, generate, send, verify, statePath, pendingDir, selfUserId = null, logger = null }) {
+export function createBridge({ config, card, book, api, generate, send, verify, statePath, pendingDir, selfUserId = null, historyMemberId = null, logger = null }) {
     const cfg = resolveBridgeConfig(config);
+    const historyId = historyMemberId ?? config.discord.memberId;
     const state = loadState(statePath, { channelId: cfg.channelId, mode: cfg.mode });
     state.mode = cfg.mode;
 
@@ -172,7 +174,7 @@ export function createBridge({ config, card, book, api, generate, send, verify, 
     function loadStore() {
         return loadHistory({
             dir: config.history.dir,
-            memberId: config.discord.memberId,
+            memberId: historyId,
             channelId: cfg.channelId,
             character: card.name,
         });
@@ -226,7 +228,7 @@ export function createBridge({ config, card, book, api, generate, send, verify, 
             userMessage,
             content,
             channelId: cfg.channelId,
-            memberId: config.discord.memberId,
+            memberId: historyId,
             createdAt: new Date().toISOString(),
         });
 
@@ -236,7 +238,8 @@ export function createBridge({ config, card, book, api, generate, send, verify, 
             fs.renameSync(pendingFile, `${pendingFile}.done`);
             return { ok: true, messageId: delivery.messageId ?? null, retried: false };
         } catch (error) {
-            const ambiguous = error?.code === 'DELIVERY_TIMEOUT' || error?.code === 'DELIVERY_UNREACHABLE';
+            const ambiguous = error?.ambiguous === true ||
+                error?.code === 'DELIVERY_TIMEOUT' || error?.code === 'DELIVERY_UNREACHABLE';
             if (ambiguous) {
                 const arrived = await verify(content, messageId).catch(() => false);
                 if (arrived) {

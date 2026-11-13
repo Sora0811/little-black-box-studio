@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { parseWebhookUrl } from './webhook.js';
+
 const DEFAULTS = {
     character: {
         card: 'examples/characters/lighthouse.json',
@@ -38,7 +40,7 @@ const DEFAULTS = {
         maxTurns: 20,
     },
     discord: {
-        provider: 'tupperbox',
+        provider: 'webhook',
         endpoint: 'http://127.0.0.1:8787',
         memberId: 1,
         channelId: null,
@@ -47,6 +49,10 @@ const DEFAULTS = {
         timeoutMs: 20000,
         token: null,
         tokenFile: null,
+        // provider "webhook": post as the character through a channel webhook.
+        webhookUrl: null,
+        webhookUrlFile: null,
+        avatarUrl: null,
     },
     outbox: {
         dir: 'data/outbox',
@@ -87,6 +93,18 @@ function envNumber(name) {
 function envString(name) {
     const raw = process.env[name];
     return raw === undefined || raw === '' ? undefined : raw;
+}
+
+function readSecretFile(file) {
+    try {
+        const line = fs.readFileSync(file, 'utf8')
+            .split(/\r?\n/)
+            .map((entry) => entry.trim())
+            .find((entry) => entry && !entry.startsWith('#'));
+        return line ? line.replace(/^['"]|['"]$/g, '') : null;
+    } catch {
+        return null;
+    }
 }
 
 function readTokenFile(file) {
@@ -136,6 +154,9 @@ function applyEnv(config) {
     next.discord.endpoint = envString('RP_TUPPERBOX_ENDPOINT') ?? next.discord.endpoint;
     next.discord.memberId = envNumber('RP_MEMBER_ID') ?? next.discord.memberId;
     next.discord.channelId = envString('RP_CHANNEL_ID') ?? next.discord.channelId;
+    next.discord.provider = envString('RP_DISCORD_PROVIDER') ?? next.discord.provider;
+    next.discord.webhookUrl = envString('DISCORD_WEBHOOK_URL') ?? next.discord.webhookUrl;
+    next.discord.avatarUrl = envString('RP_DISCORD_AVATAR_URL') ?? next.discord.avatarUrl;
 
     next.history.dir = envString('RP_HISTORY_DIR') ?? next.history.dir;
 
@@ -192,8 +213,25 @@ export function loadConfig(configPath = 'config.json', options = {}) {
     if (options.world) config.character.world = path.resolve(options.world);
     if (options.memberId !== undefined) config.discord.memberId = options.memberId;
     if (options.channelId !== undefined) config.discord.channelId = options.channelId;
+    if (options.provider) config.discord.provider = options.provider;
+    if (options.webhookUrl) config.discord.webhookUrl = options.webhookUrl;
+    const requireDelivery = options.requireDelivery ?? true;
 
-    validateConfig(config);
+    // Webhook URL is a credential: env first, then a secret file, then config.
+    const envWebhook = envString('DISCORD_WEBHOOK_URL');
+    const webhookFile = config.discord.webhookUrlFile;
+    const fileWebhook = webhookFile ? readSecretFile(path.resolve(configDir, webhookFile)) : null;
+    const webhookValue = envWebhook ?? fileWebhook ?? config.discord.webhookUrl;
+    config.discord.webhook = null;
+    config.discord.webhookSource = 'none';
+    if (webhookValue) {
+        config.discord.webhook = parseWebhookUrl(webhookValue);
+        if (envWebhook) config.discord.webhookSource = 'env';
+        else if (fileWebhook && webhookValue === fileWebhook) config.discord.webhookSource = `file:${path.basename(webhookFile)}`;
+        else config.discord.webhookSource = 'config';
+    }
+
+    validateConfig(config, { requireDelivery });
 
     const { token, source } = resolveToken(config, configDir);
     config.discord.token = token;
@@ -202,7 +240,7 @@ export function loadConfig(configPath = 'config.json', options = {}) {
     return { config, configDir, configPath: file };
 }
 
-export function validateConfig(config) {
+export function validateConfig(config, { requireDelivery = true } = {}) {
     const problems = [];
 
     if (!config.character.card) problems.push('character.card is required');
@@ -219,8 +257,18 @@ export function validateConfig(config) {
     if (!(config.model.maxTokens > 0)) problems.push('model.maxTokens must be positive');
     if (!(config.model.contextBudget > 0)) problems.push('model.contextBudget must be positive');
 
-    if (!Number.isInteger(config.discord.memberId) || config.discord.memberId <= 0 || config.discord.memberId > 2147483647) {
+    if (!['tupperbox', 'webhook'].includes(config.discord.provider)) {
+        problems.push(`discord.provider must be "tupperbox" or "webhook" (got ${config.discord.provider})`);
+    }
+    if (requireDelivery && config.discord.provider === 'webhook' && !config.discord.webhook) {
+        problems.push('discord.provider "webhook" needs discord.webhookUrl, discord.webhookUrlFile or DISCORD_WEBHOOK_URL');
+    }
+    if (requireDelivery && config.discord.provider === 'tupperbox' &&
+        (!Number.isInteger(config.discord.memberId) || config.discord.memberId <= 0 || config.discord.memberId > 2147483647)) {
         problems.push('discord.memberId must be a positive integer up to 2147483647');
+    }
+    if (config.discord.avatarUrl && !/^https?:\/\//.test(String(config.discord.avatarUrl))) {
+        problems.push('discord.avatarUrl must be an http(s) URL');
     }
     if (config.discord.channelId && !/^[1-9]\d{16,19}$/.test(String(config.discord.channelId))) {
         problems.push('discord.channelId must be a Discord snowflake string');

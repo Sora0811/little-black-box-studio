@@ -7,8 +7,9 @@
  *   node tools/bridge.mjs --config config.private-2.json --status   # 只看狀態
  *
  * The bridge reads the channel over REST (never a gateway session) and replies
- * through the existing Tupperbox proxy. The bot token never appears in logs or
- * JSON output; only its source is reported.
+ * through the configured delivery provider: a channel webhook (`webhook`) or the
+ * Tupperbox proxy (`tupperbox`). The bot token never appears in logs or JSON
+ * output; only its source is reported.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -17,7 +18,7 @@ import { loadConfig } from '../src/config.js';
 import { loadCard } from '../src/card.js';
 import { mergeBooks } from '../src/worldbook.js';
 import { generateReply } from '../src/model.js';
-import { sendMessage } from '../src/tupperbox.js';
+import { createSender, historyMemberId } from '../src/delivery.js';
 import { createDiscordApi } from '../src/discord-api.js';
 import { createBridge, resolveBridgeConfig } from '../src/bridge.js';
 import { acquireLock, readLock, LockBusyError } from '../src/bridge-lock.js';
@@ -110,18 +111,12 @@ function makeBridge(ctx, { selfUserId, api: providedApi = null }) {
         book,
         api,
         generate: generateReply,
-        send: async (content) => sendMessage({
-            endpoint: config.discord.endpoint,
-            token: config.discord.token,
-            memberId: config.discord.memberId,
-            channelId: bridgeCfg.channelId,
-            content,
-            timeoutMs: config.discord.timeoutMs,
-        }),
+        send: async (content) => createSender({ config, card, channelId: bridgeCfg.channelId })(content),
         verify,
         statePath: paths.statePath,
         pendingDir: paths.pendingDir,
         selfUserId,
+        historyMemberId: historyMemberId(config, card),
         logger: log,
     });
 
@@ -144,7 +139,8 @@ async function main() {
     else if (args.once || args.status || args.json) setLogLevel('error');
 
     if (args.status) {
-        const { bridgeCfg, paths } = buildContext(configPath);
+        const ctx = buildContext(configPath);
+        const { bridgeCfg, paths } = ctx;
         const state = fs.existsSync(paths.statePath)
             ? JSON.parse(fs.readFileSync(paths.statePath, 'utf8').replace(/^\uFEFF/, ''))
             : null;
@@ -152,6 +148,8 @@ async function main() {
             ? fs.readdirSync(paths.pendingDir).filter((name) => name.endsWith('.json'))
             : [];
         print({
+            provider: ctx.config.discord.provider,
+            webhookSource: ctx.config.discord.webhookSource,
             mode: bridgeCfg.mode,
             prefix: bridgeCfg.mode === 'prefix' ? bridgeCfg.prefix : null,
             channelId: bridgeCfg.channelId,
