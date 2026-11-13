@@ -362,6 +362,77 @@ await test('a failed delivery keeps one pending record and resends the same text
     return `cursor ${cursorAfterFailure} kept, resend without regenerating`;
 });
 
+await test('changing the channel starts a fresh cursor instead of answering the old channel', async () => {
+    const dir = freshDir();
+    const config = unitConfig(dir);
+    const world = createWorld();
+    world.post({ content: '!devil 舊頻道訊息' });
+
+    const first = makeHarness({ world, config });
+    first.bridge.state.lastMessageId = '1500000000000000000';
+    await first.bridge.pollOnce();
+    assert.equal(first.calls.sends.length, 1);
+
+    const OTHER = '1180000000000000000';
+    const movedConfig = unitConfig(dir, { channelId: OTHER });
+    const moved = makeHarness({ world, config: movedConfig });
+    assert.equal(moved.bridge.state.lastMessageId, null, 'the old channel cursor is not reused');
+
+    const backlog = world.post({ content: '!devil 新頻道舊訊息', channelId: OTHER });
+    const baseline = await moved.bridge.pollOnce();
+    assert.equal(baseline.baseline, true, 'the new channel starts from its newest message');
+    assert.equal(baseline.lastMessageId, backlog.id);
+    assert.equal(moved.calls.sends.length, 0, 'a backlog in the new channel is not answered silently');
+
+    world.post({ content: '!devil 新頻道新訊息', channelId: OTHER });
+    const next = await moved.bridge.pollOnce();
+    assert.equal(next.handled, 1, 'new messages in the new channel are answered');
+    return `new cursor=${baseline.lastMessageId}`;
+});
+
+await test('a pending reply is never sent after the channel or character changes', async () => {
+    const dir = freshDir();
+    const config = unitConfig(dir);
+    const world = createWorld();
+    world.post({ content: '!devil 失敗待重送' });
+
+    const failing = makeHarness({
+        world,
+        config,
+        sendImpl: () => { throw new DeliveryError('unauthorized', { code: 'DELIVERY_FAILED', status: 401 }); },
+    });
+    failing.bridge.state.lastMessageId = '1500000000000000000';
+    await failing.bridge.pollOnce();
+    assert.equal(failing.bridge.pending().length, 1);
+
+    const OTHER = '1180000000000000000';
+    const moved = makeHarness({ world, config: unitConfig(dir, { channelId: OTHER }) });
+    const report = await moved.bridge.pollOnce();
+    assert.equal(moved.calls.sends.length, 0, 'the old pending text is not posted to the new channel');
+    assert.equal(report.pending.skipped, 1);
+    assert.equal(moved.bridge.pending().length, 0, 'the pending record is retired');
+    const stale = fs.readdirSync(path.join(dir, 'pending')).filter((name) => name.endsWith('.stale'));
+    assert.equal(stale.length, 1, 'the stale record is kept for inspection');
+
+    // A character change (member id) also invalidates pending work.
+    const otherCharacter = unitConfig(dir);
+    const pendingDir = path.join(dir, 'pending');
+    fs.mkdirSync(pendingDir, { recursive: true });
+    fs.writeFileSync(path.join(pendingDir, '1500000000000000009.json'), JSON.stringify({
+        messageId: '1500000000000000009',
+        userMessage: '舊角色的訊息',
+        content: '舊角色的回覆',
+        channelId: CHANNEL,
+        memberId: 999,
+        createdAt: new Date().toISOString(),
+    }));
+    const sameChannel = makeHarness({ world, config: otherCharacter });
+    const again = await sameChannel.bridge.pollOnce();
+    assert.equal(again.pending.skipped, 1, 'a pending reply for another character is retired');
+    assert.equal(sameChannel.calls.sends.length, 0);
+    return 'stale pending retired, no cross-channel send';
+});
+
 await test('first run baselines at the newest message instead of answering the backlog', async () => {
     const dir = freshDir();
     const config = unitConfig(dir);

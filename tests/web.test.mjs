@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createServer } from 'node:http';
+import { createServer, request as httpRequest } from 'node:http';
 import { once } from 'node:events';
 import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -43,6 +43,30 @@ test('Web workspace serves UI, accepts cards and guards local endpoints', async 
         });
         assert.deepEqual((await png.json()).card, sample);
     }
+});
+
+test('Local endpoints accept localhost and refuse a foreign Host or body type', async (t) => {
+    const origin = await start(t, createStudio());
+    const { port } = new URL(origin);
+    const get = (host) => new Promise((resolve, reject) => {
+        const req = httpRequest({ host: '127.0.0.1', port, path: '/api/health', headers: { host } }, (res) => {
+            res.resume();
+            res.on('end', () => resolve(res.statusCode));
+        });
+        req.on('error', reject);
+        req.end();
+    });
+
+    assert.equal(await get(`127.0.0.1:${port}`), 200);
+    assert.equal(await get(`localhost:${port}`), 200, 'the printed localhost address works');
+    assert.equal(await get(`evil.test:${port}`), 403);
+
+    const wrongType = await fetch(origin + '/api/setup', {
+        method: 'POST',
+        headers: { origin, 'Content-Type': 'text/plain' },
+        body: '{}',
+    });
+    assert.equal(wrongType.status, 415, 'a form post is not mistaken for JSON');
 });
 
 test('Web chat uses both providers, activates lore, persists and resets turns', async (t) => {
@@ -183,8 +207,18 @@ test('Setup guide checks Discord read-only and writes a usable config', async (t
     assert.equal(started.bridge.status, 'running');
     const status = await (await fetch(origin + '/api/bridge')).json();
     assert.equal(status.status, 'running');
+
+    const savedWhileRunning = readFileSync(configPath, 'utf8');
+    const running = await post('setup', { ...payload, model: { ...payload.model, model: 'changed' } });
+    assert.equal(running.status, 409, 'a running bridge refuses setup changes before anything is written');
+    assert.equal(readFileSync(configPath, 'utf8'), savedWhileRunning, 'the running bridge keeps its settings');
+
     const stopped = await (await post('bridge/stop', {})).json();
     assert.equal(stopped.bridge.status, 'stopped');
+
+    const mismatch = await post('setup', { ...payload, discord: { ...payload.discord, webhookChannelId: '1000000000000000002' } });
+    assert.equal(mismatch.status, 400, 'the server rechecks the webhook channel, not just the page');
+    assert.equal(readFileSync(configPath, 'utf8'), savedWhileRunning, 'a mismatched channel writes nothing');
 
     const noToken = await post('setup', { ...payload, autostart: true, discord: { ...payload.discord, botToken: '' } });
     assert.equal(noToken.status, 400, 'autostart without a bot token is refused before anything is written');

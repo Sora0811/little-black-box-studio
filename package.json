@@ -10,7 +10,7 @@
     "start": "node src/web.js",
     "cli": "node src/cli.js",
     "bridge": "node tools/bridge.mjs",
-    "test": "node tests/run-tests.mjs && node tests/bridge-tests.mjs && node tests/webhook-tests.mjs && node --test tests/discord-check.test.mjs tests/supervisor.test.mjs tests/web.test.mjs"
+    "test": "node tests/run-tests.mjs && node tests/bridge-tests.mjs && node tests/webhook-tests.mjs && node --test tests/discord-check.test.mjs tests/setup-writer.test.mjs tests/supervisor.test.mjs tests/web.test.mjs"
   },
   "license": "MIT"
 }

@@ -34,6 +34,7 @@ button:disabled { opacity: .55; cursor: default; }
 .state { font-size: .875rem; color: #bdc6bf; }
 .state[data-tone="ok"] { color: #c4e498; }
 .state[data-tone="bad"] { color: #ff9d8a; }
+.warnings { margin: .5rem 0; padding-left: 1.1rem; color: #ffd28a; font-size: .875rem; }
 #authors { border: 1px solid #3b4143; border-radius: 8px; padding: .75rem; margin: 0 0 .75rem; }
 #authors legend { padding: 0 .3rem; }
 #author-list { display: flex; flex-wrap: wrap; gap: .5rem .9rem; }

@@ -31,6 +31,14 @@ function hasBody(message) {
         (message.sticker_items?.length ?? 0) > 0;
 }
 
+// Discord's system messages (joins, pins, calls, thread notices) have no
+// author-visible content even when the intent is on. Replies and thread
+// starters do carry content and must stay in the sample.
+const CONTENT_TYPES = new Set([0, 19, 20, 21]);
+function hasUserContent(message) {
+    return message.type === undefined || message.type === null || CONTENT_TYPES.has(Number(message.type));
+}
+
 export function createDiscordChecker({
     baseUrl = 'https://discord.com/api/v10',
     fetchImpl = globalThis.fetch,
@@ -99,7 +107,8 @@ export function createDiscordChecker({
 
         const channel = await request(`/channels/${value}`, { token: auth });
         const messages = await request(`/channels/${value}/messages?limit=20`, { token: auth });
-        const list = Array.isArray(messages) ? messages : [];
+        const all = Array.isArray(messages) ? messages : [];
+        const list = all.filter(hasUserContent);
 
         const visible = list.some((message) => message.content?.trim());
         const bodyOnly = list.length > 0 && list.every(hasBody);
@@ -123,14 +132,16 @@ export function createDiscordChecker({
             name: channel?.name ?? null,
             guildId: channel?.guild_id ? String(channel.guild_id) : null,
             intent,
-            messagesSeen: list.length,
+            messagesSeen: all.length,
             authors: [...authors.values()],
             ...(intent === 'empty' ? {
                 message: '讀到的訊息內容是空的：請到 Developer Portal → Bot 開啟 Message Content Intent，或先送一則文字訊息。',
             } : {}),
             ...(intent === 'unknown' ? {
                 message: list.length === 0
-                    ? '頻道目前沒有訊息，無法判斷 intent；請先送一則文字訊息再檢查。'
+                    ? (all.length > 0
+                        ? '頻道最近只有系統訊息，無法判斷 intent；請先送一則文字訊息再檢查。'
+                        : '頻道目前沒有訊息，無法判斷 intent；請先送一則文字訊息再檢查。')
                     : '頻道只有圖片或附件訊息，無法判斷 intent；請送一則文字訊息再檢查。',
             } : {}),
         };

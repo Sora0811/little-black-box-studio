@@ -90,9 +90,30 @@ function envNumber(name) {
     return Number.isFinite(value) ? value : undefined;
 }
 
-function envString(name) {
-    const raw = process.env[name];
+function envString(name, env = process.env) {
+    const raw = env[name];
     return raw === undefined || raw === '' ? undefined : raw;
+}
+
+function normalizeEndpoint(value) {
+    try {
+        return new URL(String(value)).href.replace(/\/+$/, '');
+    } catch {
+        return '';
+    }
+}
+
+/**
+ * The model API key is read from the environment only and sent only to the
+ * exact endpoint it was bound to. Web, CLI and the hosted bridge all use this,
+ * so a key that works in the page also works in Discord.
+ */
+export function modelApiKeyFor(endpoint, env = process.env) {
+    const key = envString('RP_MODEL_API_KEY', env) ?? envString('RP_WEB_MODEL_API_KEY', env);
+    const bound = envString('RP_MODEL_KEY_ENDPOINT', env) ?? envString('RP_WEB_KEY_ENDPOINT', env);
+    if (!key || !bound) return null;
+    const wanted = normalizeEndpoint(bound);
+    return wanted && normalizeEndpoint(endpoint) === wanted ? key : null;
 }
 
 function readSecretFile(file) {
@@ -202,6 +223,12 @@ export function loadConfig(configPath = 'config.json', options = {}) {
         const local = JSON.parse(fs.readFileSync(localPath, 'utf8').replace(/^\uFEFF/, ''));
         config = merge(config, local);
     }
+
+    // A key from a config file is never trusted; only the environment binds one,
+    // and only for the endpoint it names.
+    const apiKey = modelApiKeyFor(config.model.endpoint);
+    if (apiKey) config.model.apiKey = apiKey;
+    else delete config.model.apiKey;
 
     const resolve = (value) => (value ? path.resolve(configDir, value) : null);
     config.character.card = resolve(config.character.card);

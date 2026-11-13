@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { normalizeCard, readCardFromPng } from './card.js';
-import { DEFAULTS } from './config.js';
+import { DEFAULTS, modelApiKeyFor } from './config.js';
 import { mergeBooks } from './worldbook.js';
 import { buildPrompt } from './prompt.js';
 import { generateReply, ModelError } from './model.js';
@@ -78,12 +78,11 @@ function modelSettings(input) {
         throw new InputError('模型網址須為 HTTP 或 HTTPS，且不能包含帳密、查詢字串或片段。');
     }
     const endpoint = url.href.replace(/\/+$/, '');
-    const keyEndpoint = process.env.RP_WEB_KEY_ENDPOINT?.replace(/\/+$/, '');
-    const apiKey = input.provider === 'openai' && endpoint === keyEndpoint ? process.env.RP_WEB_MODEL_API_KEY : undefined;
+    const apiKey = input.provider === 'openai' ? modelApiKeyFor(endpoint) : null;
     if (apiKey && url.protocol !== 'https:' && !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)) {
         throw new InputError('使用 API 金鑰時，遠端模型網址須使用 HTTPS。');
     }
-    return { ...DEFAULTS.model, provider: input.provider, endpoint, model, apiKey, redirect: 'error' };
+    return { ...DEFAULTS.model, provider: input.provider, endpoint, model, apiKey: apiKey ?? undefined, redirect: 'error' };
 }
 
 const modelErrors = {
@@ -109,7 +108,9 @@ export function createStudio({
         res.setHeader('X-Content-Type-Options', 'nosniff');
         res.setHeader('Content-Security-Policy', "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
         const origin = 'http://' + req.headers.host;
-        if (req.headers.host !== '127.0.0.1:' + req.socket.localPort) {
+        const localPort = req.socket.localPort;
+        const localHost = req.headers.host === '127.0.0.1:' + localPort || req.headers.host === 'localhost:' + localPort;
+        if (!localHost) {
             return json(res, 403, { error: '請使用啟動時顯示的本機網址。' });
         }
         try {
@@ -175,6 +176,9 @@ export function createStudio({
             }
 
             if (req.url === '/api/setup') {
+                if (bridge.status().status === 'running') {
+                    throw new InputError('自動回覆執行中，請先按「停止自動回覆」再修改設定。', 409);
+                }
                 validateCard(input?.card);
                 const autostart = Boolean(input?.autostart);
                 if (autostart && !String(input?.discord?.botToken ?? '').trim()) {
@@ -191,6 +195,19 @@ export function createStudio({
                     discord: input?.discord ?? {},
                     bridge: input?.bridge ?? {},
                 });
+                const warnings = [];
+                if (process.env.RP_MODEL_API_KEY || process.env.RP_WEB_MODEL_API_KEY) {
+                    const endpoint = String(input?.model?.endpoint ?? '').trim();
+                    warnings.push(modelApiKeyFor(endpoint)
+                        ? '偵測到模型 API 金鑰：只會送到目前填寫的模型網址，不會寫進設定檔。'
+                        : '偵測到模型 API 金鑰，但與目前模型網址不符，因此不會送出。請確認 RP_MODEL_KEY_ENDPOINT（或舊的 RP_WEB_KEY_ENDPOINT）。');
+                }
+                if (process.env.DISCORD_WEBHOOK_URL) {
+                    warnings.push('偵測到 DISCORD_WEBHOOK_URL：自動回覆會優先使用環境變數的 webhook，不是剛寫入的設定。');
+                }
+                if (process.env.DISCORD_BOT_TOKEN || process.env.DISCORD_TOKEN) {
+                    warnings.push('偵測到 DISCORD_BOT_TOKEN／DISCORD_TOKEN：自動回覆會優先使用環境變數的 token。');
+                }
                 if (!autostart) {
                     return json(res, 200, {
                         ok: true,
@@ -198,6 +215,7 @@ export function createStudio({
                         cardPath: result.cardPath,
                         worldPath: result.worldPath,
                         preview: result.preview,
+                        warnings,
                         bridge: bridge.status(),
                     });
                 }
@@ -213,6 +231,7 @@ export function createStudio({
                     cardPath: result.cardPath,
                     worldPath: result.worldPath,
                     preview: result.preview,
+                    warnings,
                     bridge: bridge.status(),
                 });
             }
@@ -297,6 +316,13 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
         };
         process.on('SIGINT', shutdown);
         process.on('SIGTERM', shutdown);
+        for (const signal of ['SIGHUP', 'SIGBREAK']) {
+            try {
+                process.on(signal, shutdown);
+            } catch {
+                // Not every platform exposes these signals.
+            }
+        }
         process.on('exit', () => server.bridge.stopSync());
         server.on('error', (error) => {
             console.error(error.code === 'EADDRINUSE' ? '連接埠已被使用。請關閉舊視窗或設定 RP_WEB_PORT。' : error.code);

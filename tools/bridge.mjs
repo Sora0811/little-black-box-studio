@@ -93,6 +93,9 @@ function makeBridge(ctx, { selfUserId, api: providedApi = null }) {
         ? JSON.parse(fs.readFileSync(config.character.world, 'utf8').replace(/^\uFEFF/, ''))
         : null;
     const book = mergeBooks(card.book, extraBook);
+    // Keep the character's own prompt fields consistent with the web chat.
+    if (card.systemPrompt) config.prompt.systemPrompt = card.systemPrompt;
+    if (card.postHistoryInstructions) config.prompt.postHistoryInstructions = card.postHistoryInstructions;
     const { token, source } = readDiscordToken(configDir, config, bridgeCfg);
     if (!token && !providedApi) {
         throw new Error('找不到 Discord bot token（設 DISCORD_BOT_TOKEN，或讓 bridge.botTokenFile / discord.tokenFile 指向含 DISCORD_TOKEN 的檔案）');
@@ -221,26 +224,35 @@ async function main() {
 
         log.info(`Bridge started (mode=${bridgeCfg.mode}, channel=${bridgeCfg.channelId}, interval=${bridgeCfg.pollIntervalMs}ms)`);
         let consecutiveErrors = 0;
+        // A slow model can take minutes; keep the lock alive while one poll is
+        // in flight so a second bridge cannot mistake it for a dead holder.
+        const heartbeat = setInterval(() => {
+            try { lock.heartbeat(); } catch { /* the next cycle reports the failure */ }
+        }, Math.max(2000, Math.min(15000, Math.floor(bridgeCfg.pollIntervalMs / 2))));
 
-        for (;;) {
-            const startedAt = Date.now();
-            try {
-                // Rebuild each cycle so a config edit (for example a mode switch) applies without a restart.
-                const cycle = makeBridge(buildContext(configPath), { selfUserId: me?.id ?? null });
-                const report = await cycle.bridge.pollOnce();
-                lock.heartbeat();
-                consecutiveErrors = 0;
-                if (report.handled > 0) log.info(`Replied to ${report.handled} message(s)`);
-                if (report.stopped) log.warn('Cycle stopped early; the pending record is retried next cycle.');
-                if (report.baseline) log.info(`Baseline set at message ${report.lastMessageId}; only newer messages are answered.`);
-            } catch (error) {
-                consecutiveErrors += 1;
-                log.error(`Poll cycle failed: ${error?.message ?? error}`);
-                if (consecutiveErrors >= 5) log.error('Five consecutive failures; still retrying. Check the token and channel access.');
+        try {
+            for (;;) {
+                const startedAt = Date.now();
+                try {
+                    // Rebuild each cycle so a config edit (for example a mode switch) applies without a restart.
+                    const cycle = makeBridge(buildContext(configPath), { selfUserId: me?.id ?? null });
+                    const report = await cycle.bridge.pollOnce();
+                    lock.heartbeat();
+                    consecutiveErrors = 0;
+                    if (report.handled > 0) log.info(`Replied to ${report.handled} message(s)`);
+                    if (report.stopped) log.warn('Cycle stopped early; the pending record is retried next cycle.');
+                    if (report.baseline) log.info(`Baseline set at message ${report.lastMessageId}; only newer messages are answered.`);
+                } catch (error) {
+                    consecutiveErrors += 1;
+                    log.error(`Poll cycle failed: ${error?.message ?? error}`);
+                    if (consecutiveErrors >= 5) log.error('Five consecutive failures; still retrying. Check the token and channel access.');
+                }
+
+                const elapsed = Date.now() - startedAt;
+                await new Promise((resolve) => { setTimeout(resolve, Math.max(bridgeCfg.pollIntervalMs - elapsed, 500)); });
             }
-
-            const elapsed = Date.now() - startedAt;
-            await new Promise((resolve) => { setTimeout(resolve, Math.max(bridgeCfg.pollIntervalMs - elapsed, 500)); });
+        } finally {
+            clearInterval(heartbeat);
         }
     } finally {
         cleanup();

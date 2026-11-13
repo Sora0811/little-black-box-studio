@@ -146,6 +146,38 @@ test('an empty channel is unknown rather than broken', async (t) => {
     assert.match(result.message, /先送一則文字訊息/);
 });
 
+test('system-only channels are unknown instead of guessing the intent', async (t) => {
+    const system = [
+        { id: '1', type: 6, content: '', author: { id: '1000000000000000077', username: 'sora' } },
+        { id: '2', type: 7, content: '', author: { id: '1000000000000000077', username: 'sora' } },
+        { id: '3', type: 8, content: '', author: { id: '1000000000000000077', username: 'sora' } },
+    ];
+    const baseUrl = await mockDiscord(t, [
+        [/^\/channels\/\d+$/, (req, res) => json(res, 200, { id: CHANNEL, name: 'events' })],
+        [/^\/channels\/\d+\/messages/, (req, res) => json(res, 200, system)],
+    ]);
+    const checker = createDiscordChecker({ baseUrl });
+
+    const result = await checker.checkChannel({ token: 'test-token', channelId: CHANNEL });
+    assert.equal(result.intent, 'unknown');
+    assert.equal(result.ok, true);
+    assert.equal(result.messagesSeen, 3);
+    assert.deepEqual(result.authors, [], 'system notices do not offer the author as an allowlist entry');
+    assert.match(result.message, /系統訊息/);
+});
+
+test('a reply type carries visible content like a normal message', async (t) => {
+    const baseUrl = await mockDiscord(t, [
+        [/^\/channels\/\d+$/, (req, res) => json(res, 200, { id: CHANNEL, name: 'chat' })],
+        [/^\/channels\/\d+\/messages/, (req, res) => json(res, 200, [
+            { id: '1', type: 19, content: '這是回覆', author: { id: '1000000000000000077', username: 'sora' } },
+        ])],
+    ]);
+    const checker = createDiscordChecker({ baseUrl });
+    const result = await checker.checkChannel({ token: 'test-token', channelId: CHANNEL });
+    assert.equal(result.intent, 'visible');
+});
+
 test('missing history permission explains the 403', async (t) => {
     const baseUrl = await mockDiscord(t, [
         [/^\/channels\/\d+$/, (req, res) => json(res, 200, { id: CHANNEL, name: 'locked' })],

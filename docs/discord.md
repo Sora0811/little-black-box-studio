@@ -51,6 +51,10 @@ Developer Portal → 你的應用程式 → Bot：
 
 「只寫入設定」不會啟動 bridge，適合只想用 CLI 手動發送的人；寫出的 `config.local.json` 兩邊共用。只想手動發送時，webhook 檢查通過即可寫入，不需要 bot token；要自動回覆才需要完成 bot token 與頻道檢查。
 
+模型 API 金鑰只放在啟動程式的環境：`RP_MODEL_API_KEY` 搭配 `RP_MODEL_KEY_ENDPOINT`（舊名稱 `RP_WEB_MODEL_API_KEY`／`RP_WEB_KEY_ENDPOINT` 仍可用）。網頁、CLI 與自動回覆都讀同一組；端點不符時不附金鑰，所以自動回覆不會因為設定檔缺金鑰而 401。
+
+自動回覆執行中不能改設定：請先按「停止自動回覆」。換頻道或改角色後，舊的游標與待送訊息會作廢，不會誤發到新頻道。
+
 ### 完成清單
 
 頁面底部全部打勾才算完成：

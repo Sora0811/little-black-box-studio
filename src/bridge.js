@@ -135,7 +135,10 @@ export function emptyState({ channelId, mode }) {
 
 export function loadState(file, { channelId, mode }) {
     const raw = readJson(file, null);
-    const state = raw && typeof raw === 'object' ? raw : emptyState({ channelId, mode });
+    const sameChannel = raw && typeof raw === 'object' && String(raw.channelId ?? '') === String(channelId);
+    // A cursor belongs to one channel. Reusing it after a setup change would
+    // answer a backlog in the new channel or drop new messages in the old one.
+    const state = sameChannel ? raw : emptyState({ channelId, mode });
     if (!Array.isArray(state.processed)) state.processed = [];
     if (!('lastMessageId' in state)) state.lastMessageId = null;
     return state;
@@ -274,8 +277,17 @@ export function createBridge({ config, card, book, api, generate, send, verify, 
     /** Finish or resend work left over from a previous run or a failed cycle. */
     async function resolvePending() {
         const pending = readPending();
-        const report = { resolved: 0, failed: 0 };
+        const report = { resolved: 0, failed: 0, skipped: 0 };
         for (const { file, payload } of pending) {
+            // A pending reply belongs to the channel and character that produced
+            // it; sending it after a setup change would post to the wrong place.
+            if (String(payload.channelId ?? '') !== String(cfg.channelId) ||
+                String(payload.memberId ?? '') !== String(historyId)) {
+                const stale = `${file}.stale`;
+                fs.renameSync(file, fs.existsSync(stale) ? `${file}.${Date.now()}.stale` : stale);
+                report.skipped += 1;
+                continue;
+            }
             const arrived = await verify(payload.content, payload.messageId).catch(() => null);
             if (arrived === true) {
                 commitTurn({ messageId: payload.messageId }, payload.userMessage, payload.content);

@@ -424,6 +424,50 @@ await test('token file prefers the proxy token over DISCORD_TOKEN', async () => 
     return `source=${config.discord.tokenSource}`;
 });
 
+await test('model API key is bound to its endpoint for CLI and bridge', async () => {
+    const { loadConfig } = await import('../src/config.js');
+    const dir = path.join(TMP, 'model-key');
+    fs.mkdirSync(dir, { recursive: true });
+    const configFile = writeConfig(dir, {
+        model: {
+            provider: 'openai',
+            endpoint: 'https://api.example.test/v1',
+            model: 'mock-model',
+            temperature: 0.7,
+            maxTokens: 200,
+            contextBudget: 4096,
+            timeoutMs: 5000,
+            apiKey: 'sk-from-file',
+        },
+    });
+    const names = ['RP_MODEL_API_KEY', 'RP_MODEL_KEY_ENDPOINT', 'RP_WEB_MODEL_API_KEY', 'RP_WEB_KEY_ENDPOINT'];
+    const saved = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+    const restore = () => {
+        for (const name of names) {
+            if (saved[name] === undefined) delete process.env[name];
+            else process.env[name] = saved[name];
+        }
+    };
+    try {
+        for (const name of names) delete process.env[name];
+        assert.equal(loadConfig(configFile).config.model.apiKey, undefined, 'a key in the config file is ignored');
+
+        process.env.RP_WEB_MODEL_API_KEY = 'sk-web';
+        process.env.RP_WEB_KEY_ENDPOINT = 'https://api.example.test/v1';
+        assert.equal(loadConfig(configFile).config.model.apiKey, 'sk-web', 'the web variable also serves the bridge');
+
+        process.env.RP_MODEL_API_KEY = 'sk-cli';
+        process.env.RP_MODEL_KEY_ENDPOINT = 'https://api.example.test/v1';
+        assert.equal(loadConfig(configFile).config.model.apiKey, 'sk-cli', 'the shared variable wins');
+
+        process.env.RP_MODEL_KEY_ENDPOINT = 'https://other.example.test/v1';
+        assert.equal(loadConfig(configFile).config.model.apiKey, undefined, 'a key is never sent to another endpoint');
+        return 'file key ignored, endpoint binding enforced';
+    } finally {
+        restore();
+    }
+});
+
 await test('--reset clears history but keeps the greeting', async () => {
     const config = baseConfig();
     const run = await runCli(['--config', config, '--reset', '--json']);

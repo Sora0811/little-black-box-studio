@@ -16,7 +16,7 @@
 | --- | --- |
 | Ollama | 網址預設 `http://127.0.0.1:11434`，也可填完整的 `/api/chat` 網址。模型名稱須為服務端已載入的名稱。 |
 | OpenAI-compatible | 填服務基底網址（可帶 `/v1`）或完整 `/v1/chat/completions` 網址，再填服務提供的模型名稱。 |
-| 模型 API 金鑰 | 網頁從啟動程序的環境讀取 `RP_WEB_MODEL_API_KEY`。同時把 `RP_WEB_KEY_ENDPOINT` 設成網頁所填的模型網址，金鑰只會附在符合該網址的 OpenAI-compatible 請求。遠端金鑰請用 HTTPS。 |
+| 模型 API 金鑰 | 金鑰只從啟動程式的環境讀取，不寫進設定檔。`RP_MODEL_API_KEY`＋`RP_MODEL_KEY_ENDPOINT` 由網頁、CLI 與自動回覆共用；`RP_WEB_MODEL_API_KEY`＋`RP_WEB_KEY_ENDPOINT` 是舊名稱，仍可用。端點須與填入的模型網址完全相符（忽略結尾斜線）才會附上金鑰，避免把金鑰送到別的服務。遠端金鑰請用 HTTPS。 |
 | Web 連接埠 | 啟動前可設定 `RP_WEB_PORT`。例如 PowerShell 執行 `$env:RP_WEB_PORT = '7311'`，再執行 `npm start`。 |
 | 歷史 | 成功的網頁試聊存於 `data/web-history/`，同一卡片內容與世界書組合會讀回同一份對話。模型切換會沿用歷史。可下載角色卡 JSON 保留編輯結果。附加世界書請保留原檔。重新整理頁面後表單需重新輸入；已寫入的 `config.local.json` 不受影響，CLI 與自動回覆可直接沿用。 |
 | CLI／Bridge | 複製 `config.example.json` 成 `config.local.json` 後填寫本機值。可指定角色卡、世界書、模型溫度、回覆上限、上下文預算與歷史位置。網頁使用表單及自己的預設值。 |
@@ -40,7 +40,7 @@
 | 連接埠已被使用 | 關閉前一個工作室，或改用 `RP_WEB_PORT`。使用終端機顯示的 127.0.0.1 網址。 |
 | 網頁開不了 | 查看啟動視窗是否仍在運作。可在同一網址加上 `/api/health`，正常時會顯示版本和目前是否生成中。 |
 | 模型連不到、回覆 HTTP 404 | 確認模型服務已啟動、選對服務類型、模型已安裝，並檢查基底網址及 API 路徑。網頁請求拒絕轉址。 |
-| 模型回覆 HTTP 401／403 | 檢查金鑰、網址是否與 `RP_WEB_KEY_ENDPOINT` 一致，以及服務帳號的模型存取權。 |
+| 模型回覆 HTTP 401／403 | 檢查金鑰、網址是否與 `RP_MODEL_KEY_ENDPOINT`（或舊的 `RP_WEB_KEY_ENDPOINT`）一致，以及服務帳號的模型存取權。 |
 | 上下文超出或模型回覆為空 | 縮短角色卡／世界書，或改用支援所需上下文與輸出的模型。CLI 可調整上下文和回覆上限。 |
 | PNG 匯入失敗 | 確認原檔包含未被圖片工具移除的卡片資料。也可使用 JSON 匯出。 |
 | Discord 回傳 401／403 | webhook 路徑：401 代表網址的 token 失效或被刪（重新複製），403 代表 webhook 無權在該頻道發言。Tupperbox 路徑：401 先查代理 token，403 檢查成員和頻道授權。 |

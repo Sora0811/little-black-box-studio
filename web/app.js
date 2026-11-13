@@ -217,6 +217,8 @@ const stopBridgeButton = document.querySelector('#stop-bridge');
 
 const passed = { webhook: false, bot: false, channel: false };
 let bridgeRunning = false;
+let webhookChannelId = null;
+const checkSeq = { webhook: 0, bot: 0, channel: 0 };
 
 function setState(el, text, tone = '') {
     el.textContent = text;
@@ -234,11 +236,15 @@ function selectedAuthors() {
     return [...authorList.querySelectorAll('input:checked')].map((input) => input.value);
 }
 
+function channelMismatch() {
+    return Boolean(webhookChannelId && channelId.value.trim() !== webhookChannelId);
+}
+
 function refreshButtons() {
     // The webhook check already returns the channel id, so manual CLI use does
     // not need a bot token. Autostart still needs the verified channel.
-    const canWrite = passed.webhook && Boolean(channelId.value.trim());
-    writeSetupButton.disabled = !canWrite;
+    const canWrite = passed.webhook && Boolean(channelId.value.trim()) && !channelMismatch();
+    writeSetupButton.disabled = !canWrite || bridgeRunning;
     startBridgeButton.disabled = !(canWrite && passed.bot && passed.channel && selectedAuthors().length > 0) || bridgeRunning;
     stopBridgeButton.disabled = !bridgeRunning;
 }
@@ -271,14 +277,18 @@ function renderAuthors(list) {
 }
 
 document.querySelector('#check-webhook').addEventListener('click', () => discordTask(async () => {
+    const seq = ++checkSeq.webhook;
+    const value = webhookUrl.value.trim();
     setState(webhookState, '檢查中…');
-    const result = await api('/api/discord/webhook', { url: webhookUrl.value.trim() });
+    const result = await api('/api/discord/webhook', { url: value });
+    if (seq !== checkSeq.webhook || value !== webhookUrl.value.trim()) return;
     if (!result.ok) {
         setState(webhookState, result.error, 'bad');
         return markDone('webhook', false);
     }
-    if (result.channelId) {
-        channelId.value = result.channelId;
+    webhookChannelId = result.channelId ?? null;
+    if (webhookChannelId) {
+        channelId.value = webhookChannelId;
         markDone('channel', false);
         setState(channelState, '頻道 ID 已由 webhook 填入，請重新檢查。');
     }
@@ -287,8 +297,11 @@ document.querySelector('#check-webhook').addEventListener('click', () => discord
 }));
 
 document.querySelector('#check-bot').addEventListener('click', () => discordTask(async () => {
+    const seq = ++checkSeq.bot;
+    const token = botToken.value.trim();
     setState(botState, '檢查中…');
-    const result = await api('/api/discord/bot', { token: botToken.value.trim() });
+    const result = await api('/api/discord/bot', { token });
+    if (seq !== checkSeq.bot || token !== botToken.value.trim()) return;
     if (!result.ok) {
         setState(botState, result.error, 'bad');
         return markDone('bot', false);
@@ -298,13 +311,17 @@ document.querySelector('#check-bot').addEventListener('click', () => discordTask
 }));
 
 document.querySelector('#check-channel').addEventListener('click', () => discordTask(async () => {
-    if (!botToken.value.trim()) throw new Error('請先完成 bot token 檢查。');
+    const token = botToken.value.trim();
+    const id = channelId.value.trim();
+    if (!token) throw new Error('請先完成 bot token 檢查。');
+    if (webhookChannelId && id !== webhookChannelId) {
+        throw new Error('頻道 ID 與 webhook 所屬頻道不同；請改回 webhook 填入的頻道。');
+    }
+    const seq = ++checkSeq.channel;
     setState(channelState, '檢查中…');
-    const result = await api('/api/discord/channel', {
-        token: botToken.value.trim(),
-        channelId: channelId.value.trim(),
-    });
-    renderAuthors(result.authors ?? []);
+    const result = await api('/api/discord/channel', { token, channelId: id });
+    if (seq !== checkSeq.channel || token !== botToken.value.trim() || id !== channelId.value.trim()) return;
+    if (Array.isArray(result.authors)) renderAuthors(result.authors);
     if (result.intent !== 'visible') {
         setState(channelState, result.message ?? result.error ?? '無法確認 intent。', 'bad');
         return markDone('channel', false);
@@ -317,20 +334,29 @@ bridgeMode.addEventListener('change', () => {
     prefixRow.hidden = bridgeMode.value !== 'prefix';
 });
 
-// Editing a credential invalidates the checks that used the old value.
+// Editing a credential invalidates the checks that used the old value, and
+// makes any check response still in flight stale.
 webhookUrl.addEventListener('input', () => {
+    checkSeq.webhook += 1;
+    webhookChannelId = null;
     markDone('webhook', false);
     markDone('channel', false);
     setState(webhookState, '已變更，請重新檢查。');
 });
 botToken.addEventListener('input', () => {
+    checkSeq.bot += 1;
     markDone('bot', false);
     markDone('channel', false);
     setState(botState, '已變更，請重新檢查。');
 });
 channelId.addEventListener('input', () => {
+    checkSeq.channel += 1;
     markDone('channel', false);
-    setState(channelState, '已變更，請重新檢查。');
+    if (channelMismatch()) {
+        setState(channelState, '頻道 ID 必須與 webhook 所屬頻道相同。', 'bad');
+    } else {
+        setState(channelState, '已變更，請重新檢查。');
+    }
 });
 
 function setupPayload(autostart) {
@@ -338,6 +364,9 @@ function setupPayload(autostart) {
     const card = formCard(form);
     if (!card.data.name?.trim() || !card.data.description?.trim()) {
         throw new Error('請先填寫角色名稱與描述。');
+    }
+    if (channelMismatch()) {
+        throw new Error('頻道 ID 與 webhook 所屬頻道不同；請重新檢查 webhook 或改回它填入的頻道。');
     }
     return {
         card,
@@ -350,6 +379,7 @@ function setupPayload(autostart) {
         },
         discord: {
             webhookUrl: webhookUrl.value.trim(),
+            webhookChannelId,
             channelId: channelId.value.trim(),
             botToken: botToken.value.trim(),
         },
@@ -365,6 +395,13 @@ function showSetup(result) {
     configPreview.textContent = JSON.stringify(result.preview, null, 2);
     configBox.hidden = false;
     document.querySelector('#cli-row').hidden = false;
+    const warningList = document.querySelector('#setup-warnings');
+    warningList.replaceChildren(...(result.warnings ?? []).map((text) => {
+        const item = document.createElement('li');
+        item.textContent = text;
+        return item;
+    }));
+    warningList.hidden = !(result.warnings ?? []).length;
 }
 
 document.querySelector('#copy-cli').addEventListener('click', async () => {
