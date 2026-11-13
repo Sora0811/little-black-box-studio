@@ -25,4 +25,24 @@ button:disabled { opacity: .55; cursor: default; }
 #messages li[data-role="user"] { background: #373c2d; }
 #messages p { margin: .2rem 0 0; white-space: pre-wrap; }
 .note { font-size: .875rem; }
+.discord { grid-column: 1 / -1; }
+.hint { color: #bdc6bf; font-size: .875rem; margin: .25rem 0 .75rem; }
+.checks { list-style: none; padding: 0; margin: 0; display: grid; gap: 1rem; }
+.checks > li { border-top: 1px solid #3b4143; padding-top: .9rem; }
+.checks h3 { font-size: 1rem; margin: 0 0 .35rem; }
+.check-row { display: flex; align-items: center; gap: .6rem; margin: 0 0 .6rem; }
+.state { font-size: .875rem; color: #bdc6bf; }
+.state[data-tone="ok"] { color: #c4e498; }
+.state[data-tone="bad"] { color: #ff9d8a; }
+#authors { border: 1px solid #3b4143; border-radius: 8px; padding: .75rem; margin: 0 0 .75rem; }
+#authors legend { padding: 0 .3rem; }
+#author-list { display: flex; flex-wrap: wrap; gap: .5rem .9rem; }
+#author-list label { display: flex; gap: .4rem; align-items: center; margin: 0; }
+#author-list input { width: auto; }
+#bridge-log { max-height: 12rem; }
+pre { background: #171a1b; border: 1px solid #626c67; border-radius: 6px; padding: .6rem; overflow: auto; max-height: 18rem; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .8rem; }
+#done-list { list-style: none; padding: 0; display: grid; gap: .35rem; }
+#done-list li::before { content: "○ "; color: #bdc6bf; }
+#done-list li[data-done="1"]::before { content: "✓ "; color: #c4e498; }
+#done-list li[data-done="1"] { color: #c4e498; }
 @media (max-width: 720px) { main { grid-template-columns: 1fr; } }

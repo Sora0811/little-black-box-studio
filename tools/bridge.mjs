@@ -186,6 +186,23 @@ async function main() {
     process.on('SIGINT', () => { cleanup(); process.exit(130); });
     process.on('SIGTERM', () => { cleanup(); process.exit(143); });
 
+    // The studio that spawned this bridge sets its pid. If the studio is killed
+    // without running its own shutdown handler, stop instead of replying alone.
+    const parentPid = Number(process.env.LBB_PARENT_PID);
+    if (!args.once && Number.isInteger(parentPid) && parentPid > 0) {
+        setInterval(() => {
+            try {
+                process.kill(parentPid, 0);
+            } catch (error) {
+                if (error?.code === 'ESRCH') {
+                    log.warn('The studio process is gone; stopping the bridge.');
+                    cleanup();
+                    process.exit(0);
+                }
+            }
+        }, 2000).unref();
+    }
+
     try {
         // Identify the bot once so its own messages are ignored even if it ever posts directly.
         const boot = makeBridge(ctx, { selfUserId: null });

@@ -1,9 +1,11 @@
 @echo off
+chcp 65001 >nul
+title 小黑盒 Discord 角色工作室
 setlocal
 cd /d "%~dp0"
 where node >nul 2>nul
 if errorlevel 1 (
-  echo Node.js 20 or newer is required.
+  echo 需要 Node.js 20 以上。請先從 https://nodejs.org/ 安裝，再重新執行 start.cmd。
   pause
   exit /b 1
 )

@@ -35,7 +35,63 @@
 <p id="status" role="status">請先填寫設定，或載入合成範例。</p>
 <ol id="messages" aria-label="對話紀錄"></ol>
 <form id="chat"><label>你的訊息<textarea id="message" rows="2" required maxlength="8000" disabled></textarea></label><button id="send" class="primary" disabled>送出</button></form>
-<p class="note">Discord 為選配。進階 CLI 與 REST Bridge 的設定方式請見 README。</p>
+<p class="note">Discord 為選配。下面的「Discord 連線」會帶你完成檢查，並把設定寫成 CLI 也能直接使用的檔案。</p>
+</section>
+<section class="discord" aria-labelledby="discord-title">
+<h2 id="discord-title">Discord 連線</h2>
+<p class="hint">依序貼上並檢查。這裡只驗證你貼上的內容，不會替你建立 webhook、bot 或訊息。</p>
+<ol class="checks">
+<li>
+<h3>1　頻道 webhook</h3>
+<p class="hint">Discord 頻道設定 → 整合 → Webhook → 新增 Webhook，複製網址。需要「管理 Webhook」權限。</p>
+<label>Webhook 網址<input id="webhook-url" type="password" autocomplete="off" spellcheck="false"></label>
+<p class="check-row"><button id="check-webhook" type="button">檢查</button><span id="webhook-state" class="state" role="status"></span></p>
+</li>
+<li>
+<h3>2　Bot token（只有自動回覆需要）</h3>
+<p class="hint">Developer Portal → 你的應用程式 → Bot：Reset Token，並開啟 Message Content Intent。邀請 bot 時給「檢視頻道」與「讀取訊息歷史」。</p>
+<label>Bot token<input id="bot-token" type="password" autocomplete="off" spellcheck="false"></label>
+<p class="check-row"><button id="check-bot" type="button">檢查</button><span id="bot-state" class="state" role="status"></span></p>
+</li>
+<li>
+<h3>3　頻道與 intent</h3>
+<p class="hint">頻道 ID 會在 webhook 通過後自動填入。這一步會讀取最近訊息，確認 bot 看得到文字內容。</p>
+<label>頻道 ID<input id="channel-id" inputmode="numeric" autocomplete="off" spellcheck="false"></label>
+<p class="check-row"><button id="check-channel" type="button">檢查</button><span id="channel-state" class="state" role="status"></span></p>
+<fieldset id="authors" hidden>
+<legend>允許回覆的使用者</legend>
+<p class="hint">勾選可以跟角色說話的人；其他人發言會被忽略。</p>
+<div id="author-list"></div>
+</fieldset>
+<label>回覆模式<select id="bridge-mode">
+<option value="natural">白名單使用者的一般訊息</option>
+<option value="prefix">需要前綴</option>
+</select></label>
+<label id="prefix-row" hidden>前綴<input id="bridge-prefix" value="!devil" maxlength="20"></label>
+</li>
+</ol>
+<div class="actions">
+<button id="write-setup" type="button">只寫入設定</button>
+<button id="start-bridge" class="primary" type="button">寫入並啟動自動回覆</button>
+<button id="stop-bridge" type="button" disabled>停止自動回覆</button>
+</div>
+<p id="setup-state" role="status" class="state"></p>
+<div class="bridge">
+<p class="state">自動回覆：<span id="bridge-state">未啟動</span></p>
+<pre id="bridge-log" aria-label="自動回覆輸出" hidden></pre>
+</div>
+<details id="config-box" hidden><summary>設定檔預覽（憑證已遮蔽）</summary><pre id="config-preview"></pre></details>
+<p id="cli-row" hidden><button id="copy-cli" type="button">複製 CLI 預覽指令</button> <span id="copy-state" class="state" role="status"></span></p>
+<p class="hint">設定檔為 <code>config.local.json</code>，bot token 寫在 <code>data/bridge.env</code>；兩者都在 .gitignore 內，仍請勿分享。</p>
+<h3>完成清單</h3>
+<ul id="done-list">
+<li data-done="0" data-step="card">角色卡與模型已套用</li>
+<li data-done="0" data-step="chat">網頁試聊成功</li>
+<li data-done="0" data-step="webhook">webhook 檢查通過</li>
+<li data-done="0" data-step="bot">bot token 檢查通過</li>
+<li data-done="0" data-step="channel">頻道可讀，且 intent 已開</li>
+<li data-done="0" data-step="bridge">自動回覆執行中</li>
+</ul>
 </section>
 </main>
 </body>
