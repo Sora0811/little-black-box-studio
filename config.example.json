@@ -34,13 +34,16 @@
     "maxTurns": 20
   },
   "discord": {
-    "provider": "tupperbox",
-    "endpoint": "http://127.0.0.1:8787",
-    "memberId": 1,
+    "provider": "webhook",
     "channelId": null,
     "maxLength": 2000,
     "sanitizeMentions": true,
     "timeoutMs": 20000,
+    "webhookUrl": null,
+    "webhookUrlFile": null,
+    "avatarUrl": null,
+    "endpoint": "http://127.0.0.1:8787",
+    "memberId": 1,
     "token": null,
     "tokenFile": null
   },

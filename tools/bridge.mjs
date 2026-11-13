@@ -7,8 +7,9 @@
  *   node tools/bridge.mjs --config config.private-2.json --status   # 只看狀態
  *
  * The bridge reads the channel over REST (never a gateway session) and replies
- * through the existing Tupperbox proxy. The bot token never appears in logs or
- * JSON output; only its source is reported.
+ * through the configured delivery provider: a channel webhook (`webhook`) or the
+ * Tupperbox proxy (`tupperbox`). The bot token never appears in logs or JSON
+ * output; only its source is reported.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -17,7 +18,7 @@ import { loadConfig } from '../src/config.js';
 import { loadCard } from '../src/card.js';
 import { mergeBooks } from '../src/worldbook.js';
 import { generateReply } from '../src/model.js';
-import { sendMessage } from '../src/tupperbox.js';
+import { createSender, historyMemberId } from '../src/delivery.js';
 import { createDiscordApi } from '../src/discord-api.js';
 import { createBridge, resolveBridgeConfig } from '../src/bridge.js';
 import { acquireLock, readLock, LockBusyError } from '../src/bridge-lock.js';
@@ -92,6 +93,9 @@ function makeBridge(ctx, { selfUserId, api: providedApi = null }) {
         ? JSON.parse(fs.readFileSync(config.character.world, 'utf8').replace(/^\uFEFF/, ''))
         : null;
     const book = mergeBooks(card.book, extraBook);
+    // Keep the character's own prompt fields consistent with the web chat.
+    if (card.systemPrompt) config.prompt.systemPrompt = card.systemPrompt;
+    if (card.postHistoryInstructions) config.prompt.postHistoryInstructions = card.postHistoryInstructions;
     const { token, source } = readDiscordToken(configDir, config, bridgeCfg);
     if (!token && !providedApi) {
         throw new Error('找不到 Discord bot token（設 DISCORD_BOT_TOKEN，或讓 bridge.botTokenFile / discord.tokenFile 指向含 DISCORD_TOKEN 的檔案）');
@@ -110,18 +114,12 @@ function makeBridge(ctx, { selfUserId, api: providedApi = null }) {
         book,
         api,
         generate: generateReply,
-        send: async (content) => sendMessage({
-            endpoint: config.discord.endpoint,
-            token: config.discord.token,
-            memberId: config.discord.memberId,
-            channelId: bridgeCfg.channelId,
-            content,
-            timeoutMs: config.discord.timeoutMs,
-        }),
+        send: async (content) => createSender({ config, card, channelId: bridgeCfg.channelId })(content),
         verify,
         statePath: paths.statePath,
         pendingDir: paths.pendingDir,
         selfUserId,
+        historyMemberId: historyMemberId(config, card),
         logger: log,
     });
 
@@ -144,7 +142,8 @@ async function main() {
     else if (args.once || args.status || args.json) setLogLevel('error');
 
     if (args.status) {
-        const { bridgeCfg, paths } = buildContext(configPath);
+        const ctx = buildContext(configPath);
+        const { bridgeCfg, paths } = ctx;
         const state = fs.existsSync(paths.statePath)
             ? JSON.parse(fs.readFileSync(paths.statePath, 'utf8').replace(/^\uFEFF/, ''))
             : null;
@@ -152,6 +151,8 @@ async function main() {
             ? fs.readdirSync(paths.pendingDir).filter((name) => name.endsWith('.json'))
             : [];
         print({
+            provider: ctx.config.discord.provider,
+            webhookSource: ctx.config.discord.webhookSource,
             mode: bridgeCfg.mode,
             prefix: bridgeCfg.mode === 'prefix' ? bridgeCfg.prefix : null,
             channelId: bridgeCfg.channelId,
@@ -188,6 +189,23 @@ async function main() {
     process.on('SIGINT', () => { cleanup(); process.exit(130); });
     process.on('SIGTERM', () => { cleanup(); process.exit(143); });
 
+    // The studio that spawned this bridge sets its pid. If the studio is killed
+    // without running its own shutdown handler, stop instead of replying alone.
+    const parentPid = Number(process.env.LBB_PARENT_PID);
+    if (!args.once && Number.isInteger(parentPid) && parentPid > 0) {
+        setInterval(() => {
+            try {
+                process.kill(parentPid, 0);
+            } catch (error) {
+                if (error?.code === 'ESRCH') {
+                    log.warn('The studio process is gone; stopping the bridge.');
+                    cleanup();
+                    process.exit(0);
+                }
+            }
+        }, 2000).unref();
+    }
+
     try {
         // Identify the bot once so its own messages are ignored even if it ever posts directly.
         const boot = makeBridge(ctx, { selfUserId: null });
@@ -206,26 +224,35 @@ async function main() {
 
         log.info(`Bridge started (mode=${bridgeCfg.mode}, channel=${bridgeCfg.channelId}, interval=${bridgeCfg.pollIntervalMs}ms)`);
         let consecutiveErrors = 0;
+        // A slow model can take minutes; keep the lock alive while one poll is
+        // in flight so a second bridge cannot mistake it for a dead holder.
+        const heartbeat = setInterval(() => {
+            try { lock.heartbeat(); } catch { /* the next cycle reports the failure */ }
+        }, Math.max(2000, Math.min(15000, Math.floor(bridgeCfg.pollIntervalMs / 2))));
 
-        for (;;) {
-            const startedAt = Date.now();
-            try {
-                // Rebuild each cycle so a config edit (for example a mode switch) applies without a restart.
-                const cycle = makeBridge(buildContext(configPath), { selfUserId: me?.id ?? null });
-                const report = await cycle.bridge.pollOnce();
-                lock.heartbeat();
-                consecutiveErrors = 0;
-                if (report.handled > 0) log.info(`Replied to ${report.handled} message(s)`);
-                if (report.stopped) log.warn('Cycle stopped early; the pending record is retried next cycle.');
-                if (report.baseline) log.info(`Baseline set at message ${report.lastMessageId}; only newer messages are answered.`);
-            } catch (error) {
-                consecutiveErrors += 1;
-                log.error(`Poll cycle failed: ${error?.message ?? error}`);
-                if (consecutiveErrors >= 5) log.error('Five consecutive failures; still retrying. Check the token and channel access.');
+        try {
+            for (;;) {
+                const startedAt = Date.now();
+                try {
+                    // Rebuild each cycle so a config edit (for example a mode switch) applies without a restart.
+                    const cycle = makeBridge(buildContext(configPath), { selfUserId: me?.id ?? null });
+                    const report = await cycle.bridge.pollOnce();
+                    lock.heartbeat();
+                    consecutiveErrors = 0;
+                    if (report.handled > 0) log.info(`Replied to ${report.handled} message(s)`);
+                    if (report.stopped) log.warn('Cycle stopped early; the pending record is retried next cycle.');
+                    if (report.baseline) log.info(`Baseline set at message ${report.lastMessageId}; only newer messages are answered.`);
+                } catch (error) {
+                    consecutiveErrors += 1;
+                    log.error(`Poll cycle failed: ${error?.message ?? error}`);
+                    if (consecutiveErrors >= 5) log.error('Five consecutive failures; still retrying. Check the token and channel access.');
+                }
+
+                const elapsed = Date.now() - startedAt;
+                await new Promise((resolve) => { setTimeout(resolve, Math.max(bridgeCfg.pollIntervalMs - elapsed, 500)); });
             }
-
-            const elapsed = Date.now() - startedAt;
-            await new Promise((resolve) => { setTimeout(resolve, Math.max(bridgeCfg.pollIntervalMs - elapsed, 500)); });
+        } finally {
+            clearInterval(heartbeat);
         }
     } finally {
         cleanup();

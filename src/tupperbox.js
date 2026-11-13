@@ -1,12 +1,6 @@
-export class DeliveryError extends Error {
-    constructor(message, details = {}) {
-        super(message);
-        this.name = 'DeliveryError';
-        this.code = details.code ?? 'DELIVERY_ERROR';
-        this.status = details.status ?? null;
-        this.detail = details.detail ?? null;
-    }
-}
+import { DeliveryError } from './delivery-error.js';
+
+export { DeliveryError };
 
 export function resolveProxyUrl(endpoint) {
     const base = String(endpoint).replace(/\/+$/, '');
@@ -46,7 +40,7 @@ export async function sendMessage({ endpoint, token, memberId, channelId, conten
     if (!content || !String(content).trim()) {
         throw new DeliveryError('訊息內容為空，未發送', { code: 'EMPTY_CONTENT' });
     }
-    if (Array.from(content).length > 2000) {
+    if (String(content).length > 2000) {
         throw new DeliveryError('訊息超過 Discord 2000 字元上限，未發送', { code: 'CONTENT_TOO_LONG' });
     }
 

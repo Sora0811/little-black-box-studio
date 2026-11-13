@@ -3,7 +3,8 @@
  *
  * Polls one channel over REST, decides whether a message is addressed to the
  * character, generates a reply through the existing prompt/model pipeline and
- * posts it through the existing Tupperbox proxy. Two modes:
+ * posts it with the configured delivery provider (channel webhook by default,
+ * Tupperbox proxy as a legacy option). Two modes:
  *
  *   prefix  — only messages starting with the configured prefix
  *   natural — any message from an allowed user in the allowed channel
@@ -134,7 +135,10 @@ export function emptyState({ channelId, mode }) {
 
 export function loadState(file, { channelId, mode }) {
     const raw = readJson(file, null);
-    const state = raw && typeof raw === 'object' ? raw : emptyState({ channelId, mode });
+    const sameChannel = raw && typeof raw === 'object' && String(raw.channelId ?? '') === String(channelId);
+    // A cursor belongs to one channel. Reusing it after a setup change would
+    // answer a backlog in the new channel or drop new messages in the old one.
+    const state = sameChannel ? raw : emptyState({ channelId, mode });
     if (!Array.isArray(state.processed)) state.processed = [];
     if (!('lastMessageId' in state)) state.lastMessageId = null;
     return state;
@@ -156,8 +160,9 @@ export function saveState(file, state) {
  * @param {string} deps.statePath
  * @param {string} deps.pendingDir
  */
-export function createBridge({ config, card, book, api, generate, send, verify, statePath, pendingDir, selfUserId = null, logger = null }) {
+export function createBridge({ config, card, book, api, generate, send, verify, statePath, pendingDir, selfUserId = null, historyMemberId = null, logger = null }) {
     const cfg = resolveBridgeConfig(config);
+    const historyId = historyMemberId ?? config.discord.memberId;
     const state = loadState(statePath, { channelId: cfg.channelId, mode: cfg.mode });
     state.mode = cfg.mode;
 
@@ -172,7 +177,7 @@ export function createBridge({ config, card, book, api, generate, send, verify, 
     function loadStore() {
         return loadHistory({
             dir: config.history.dir,
-            memberId: config.discord.memberId,
+            memberId: historyId,
             channelId: cfg.channelId,
             character: card.name,
         });
@@ -226,7 +231,7 @@ export function createBridge({ config, card, book, api, generate, send, verify, 
             userMessage,
             content,
             channelId: cfg.channelId,
-            memberId: config.discord.memberId,
+            memberId: historyId,
             createdAt: new Date().toISOString(),
         });
 
@@ -236,7 +241,8 @@ export function createBridge({ config, card, book, api, generate, send, verify, 
             fs.renameSync(pendingFile, `${pendingFile}.done`);
             return { ok: true, messageId: delivery.messageId ?? null, retried: false };
         } catch (error) {
-            const ambiguous = error?.code === 'DELIVERY_TIMEOUT' || error?.code === 'DELIVERY_UNREACHABLE';
+            const ambiguous = error?.ambiguous === true ||
+                error?.code === 'DELIVERY_TIMEOUT' || error?.code === 'DELIVERY_UNREACHABLE';
             if (ambiguous) {
                 const arrived = await verify(content, messageId).catch(() => false);
                 if (arrived) {
@@ -271,8 +277,17 @@ export function createBridge({ config, card, book, api, generate, send, verify, 
     /** Finish or resend work left over from a previous run or a failed cycle. */
     async function resolvePending() {
         const pending = readPending();
-        const report = { resolved: 0, failed: 0 };
+        const report = { resolved: 0, failed: 0, skipped: 0 };
         for (const { file, payload } of pending) {
+            // A pending reply belongs to the channel and character that produced
+            // it; sending it after a setup change would post to the wrong place.
+            if (String(payload.channelId ?? '') !== String(cfg.channelId) ||
+                String(payload.memberId ?? '') !== String(historyId)) {
+                const stale = `${file}.stale`;
+                fs.renameSync(file, fs.existsSync(stale) ? `${file}.${Date.now()}.stale` : stale);
+                report.skipped += 1;
+                continue;
+            }
             const arrived = await verify(payload.content, payload.messageId).catch(() => null);
             if (arrived === true) {
                 commitTurn({ messageId: payload.messageId }, payload.userMessage, payload.content);
