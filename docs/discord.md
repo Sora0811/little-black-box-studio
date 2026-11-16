@@ -55,6 +55,8 @@ Developer Portal → 你的應用程式 → Bot：
 
 自動回覆執行中不能改設定：請先按「停止自動回覆」。換頻道或改角色後，舊的游標與待送訊息會作廢，不會誤發到新頻道。
 
+重試有上限，不會卡在同一則訊息：401、403、404、內容過長等永久錯誤只嘗試一次；429、5xx、逾時等可恢復錯誤每次循環最多送一次，累計 5 次後放棄。模型連續 3 個循環都失敗的訊息也會跳過，讓後面的訊息繼續。放棄的回覆留在 `data/bridge-pending/` 的 `.failed` 檔，頁面會顯示「已放棄 N 則回覆」與最後原因；修好設定後可自行檢視或刪除。
+
 ### 完成清單
 
 頁面底部全部打勾才算完成：
@@ -89,7 +91,7 @@ npm run cli -- --config config.local.json --message "我想看潮汐表" --send 
 
 `channelId` 是字串。歷史檔依角色名與頻道分開存放。同一個 webhook 想讓不同角色有不同頭像時填 `discord.avatarUrl`（https 圖片網址）。
 
-失敗時內容留在 `data/outbox/`。webhook 以 `wait=1` 送出，成功一定拿得到 messageId；逾時或 5xx 會先回頻道確認，再決定是否重送。
+失敗時內容留在 `data/outbox/`。webhook 以 `wait=1` 送出，成功一定拿得到 messageId；逾時或 5xx 會先回頻道確認，再決定是否重送。自動回覆的待送與放棄紀錄在 `data/bridge-pending/`，`.failed` 表示已達重試上限或遇到永久錯誤。
 
 ## 限制
 
