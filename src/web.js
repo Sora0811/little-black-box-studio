@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -64,10 +64,30 @@ function validateCard(raw, metadata) {
     }
 }
 
+function optionalNumber(value) {
+    if (value === undefined || value === null || String(value).trim() === '') return undefined;
+    return Number(value);
+}
+
 function modelSettings(input) {
     if (!['ollama', 'openai'].includes(input?.provider)) throw new InputError('請選擇模型服務。');
     const model = typeof input.model === 'string' ? input.model.trim() : '';
     if (!model || model.length > 200) throw new InputError('請輸入有效的模型名稱。');
+    const maxTokens = optionalNumber(input?.maxTokens) ?? DEFAULTS.model.maxTokens;
+    if (!Number.isInteger(maxTokens) || maxTokens < 16 || maxTokens > 32768) {
+        throw new InputError('回覆上限須為 16 到 32768 的整數（tokens）。');
+    }
+    const contextBudget = optionalNumber(input?.contextBudget) ?? DEFAULTS.model.contextBudget;
+    if (!Number.isInteger(contextBudget) || contextBudget < 1024 || contextBudget > 1048576) {
+        throw new InputError('上下文預算須為 1024 到 1048576 的整數（tokens）。');
+    }
+    if (contextBudget < maxTokens + 64) {
+        throw new InputError('上下文預算必須大於回覆上限，至少多 64 tokens。');
+    }
+    const temperature = optionalNumber(input?.temperature) ?? DEFAULTS.model.temperature;
+    if (!Number.isFinite(temperature) || temperature < 0 || temperature > 2) {
+        throw new InputError('溫度須為 0 到 2 之間的數字。');
+    }
     let url;
     try {
         url = new URL(input.endpoint);
@@ -82,7 +102,17 @@ function modelSettings(input) {
     if (apiKey && url.protocol !== 'https:' && !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)) {
         throw new InputError('使用 API 金鑰時，遠端模型網址須使用 HTTPS。');
     }
-    return { ...DEFAULTS.model, provider: input.provider, endpoint, model, apiKey: apiKey ?? undefined, redirect: 'error' };
+    return {
+        ...DEFAULTS.model,
+        provider: input.provider,
+        endpoint,
+        model,
+        maxTokens,
+        contextBudget,
+        temperature,
+        apiKey: apiKey ?? undefined,
+        redirect: 'error',
+    };
 }
 
 const modelErrors = {
@@ -98,11 +128,27 @@ export function createStudio({
     discordBaseUrl = 'https://discord.com/api/v10',
     checker = null,
     supervisor = null,
+    // Any local program can spoof Host and Origin, so the API needs a secret the
+    // page only receives from the printed URL. The cookie keeps reloads working.
+    apiToken = randomBytes(24).toString('base64url'),
 } = {}) {
     const discord = checker ?? createDiscordChecker({ baseUrl: discordBaseUrl });
     const bridge = supervisor ?? createBridgeSupervisor({ projectDir });
     const configPath = path.join(projectDir, 'config.local.json');
     let busy = false;
+
+    const sameToken = (value) => {
+        const left = Buffer.from(String(value ?? ''));
+        const right = Buffer.from(String(apiToken));
+        return left.length === right.length && timingSafeEqual(left, right);
+    };
+    const requestToken = (req) => {
+        const header = req.headers['x-studio-token'];
+        if (header) return { value: String(header), source: 'header' };
+        const match = /(?:^|;\s*)lbb=([^;]+)/.exec(String(req.headers.cookie ?? ''));
+        return match ? { value: decodeURIComponent(match[1]), source: 'cookie' } : { value: null, source: 'none' };
+    };
+
     const server = createServer(async (req, res) => {
         res.setHeader('Cache-Control', 'no-store');
         res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -112,6 +158,17 @@ export function createStudio({
         const localHost = req.headers.host === '127.0.0.1:' + localPort || req.headers.host === 'localhost:' + localPort;
         if (!localHost) {
             return json(res, 403, { error: '請使用啟動時顯示的本機網址。' });
+        }
+        // The printed URL carries ?token=; match it once and keep it in a cookie
+        // so a reload, or a second tab at "/", still works without the query.
+        const queryToken = new URL(req.url, origin).searchParams.get('token');
+        if (queryToken && sameToken(queryToken)) {
+            res.setHeader('Set-Cookie', `lbb=${encodeURIComponent(apiToken)}; HttpOnly; SameSite=Strict; Path=/`);
+        }
+        const { value: token, source: tokenSource } = requestToken(req);
+        const authorized = tokenSource !== 'none' && sameToken(token);
+        if (req.url.startsWith('/api/') && !authorized) {
+            return json(res, 401, { error: '工作階段金鑰不符。請使用啟動視窗顯示、帶 token 的網址重新開啟頁面。' });
         }
         try {
             if (req.method === 'GET' && assets.has(req.url)) {
@@ -274,7 +331,10 @@ export function createStudio({
             };
             const prompt = buildPrompt({ card, book, history: store.messages, userMessage: message, config });
             if (prompt.stats.totalTokens + config.model.maxTokens > config.model.contextBudget) {
-                throw new InputError('角色卡、世界書或訊息超過目前的模型上下文預算。');
+                throw new InputError(
+                    `角色卡、世界書與訊息共約 ${prompt.stats.totalTokens} tokens，加上回覆上限 ${config.model.maxTokens} 超過上下文預算 ${config.model.contextBudget}。` +
+                    '請提高上下文預算、縮短角色卡／世界書，或降低回覆上限。',
+                );
             }
             busy = true;
             try {
@@ -300,6 +360,7 @@ export function createStudio({
         }
     });
     server.bridge = bridge;
+    server.apiToken = apiToken;
     return server;
 }
 
@@ -329,10 +390,11 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
             process.exitCode = 1;
         });
         server.listen(port, '127.0.0.1', () => {
-            const url = 'http://127.0.0.1:' + port;
+            const url = 'http://127.0.0.1:' + port + '/?token=' + encodeURIComponent(server.apiToken);
             console.log('');
             console.log('小黑盒 Discord 角色工作室');
             console.log('網址：' + url);
+            console.log('這個網址含工作階段金鑰，只給這台電腦的瀏覽器用；其他程式拿到一般網址也叫不動 API。');
             console.log('請保持此視窗開啟；關閉視窗會停止網頁與 Discord 自動回覆。');
             if (process.platform === 'win32' && process.argv.includes('--open')) {
                 const browser = spawn('cmd.exe', ['/d', '/c', 'start', '""', url], { windowsHide: true, stdio: 'ignore' });

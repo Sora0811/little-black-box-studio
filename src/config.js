@@ -14,7 +14,7 @@ const DEFAULTS = {
         endpoint: 'http://127.0.0.1:11434',
         model: 'YOUR_MODEL_NAME',
         temperature: 0.7,
-        maxTokens: 320,
+        maxTokens: 512,
         contextBudget: 8192,
         timeoutMs: 180000,
     },

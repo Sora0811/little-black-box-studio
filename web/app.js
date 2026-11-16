@@ -155,11 +155,26 @@ document.querySelector('#export-card').addEventListener('click', () => {
     setTimeout(() => URL.revokeObjectURL(link.href), 1000);
 });
 
+function modelFields(form) {
+    const read = (name) => {
+        const value = String(form.get(name) ?? '').trim();
+        return value === '' ? undefined : Number(value);
+    };
+    return {
+        provider: form.get('provider'),
+        endpoint: form.get('endpoint'),
+        model: form.get('model'),
+        maxTokens: read('max_tokens'),
+        contextBudget: read('context_budget'),
+        temperature: read('temperature'),
+    };
+}
+
 setup.addEventListener('submit', (event) => {
     event.preventDefault();
     const form = new FormData(setup);
     const card = formCard(form);
-    const model = Object.fromEntries(['provider', 'endpoint', 'model'].map((field) => [field, form.get(field)]));
+    const model = modelFields(form);
     perform(async () => {
         const next = { card, model, world };
         const result = await api('/api/history', next);
@@ -372,11 +387,7 @@ function setupPayload(autostart) {
         card,
         world,
         autostart,
-        model: {
-            provider: form.get('provider'),
-            endpoint: form.get('endpoint'),
-            model: form.get('model'),
-        },
+        model: modelFields(form),
         discord: {
             webhookUrl: webhookUrl.value.trim(),
             webhookChannelId,
@@ -458,6 +469,16 @@ async function refreshBridge() {
     bridgeLog.hidden = lines.length === 0;
     bridgeLog.textContent = lines.join('\n');
     bridgeLog.scrollTop = bridgeLog.scrollHeight;
+    const failedPending = Number(snapshot.failedPending ?? 0);
+    const failedMessages = snapshot.failedMessages?.length ?? 0;
+    const failedTotal = failedPending + failedMessages;
+    const failedBox = document.querySelector('#bridge-failed');
+    failedBox.hidden = failedTotal === 0;
+    if (failedTotal) {
+        const last = snapshot.failedMessages?.at(-1);
+        failedBox.dataset.tone = 'bad';
+        failedBox.textContent = `已放棄 ${failedTotal} 則回覆${last ? `（最後原因：${last.reason}）` : ''}；內容留在 data/bridge-pending 的 .failed 檔，修好設定後可自行處理。`;
+    }
     document.querySelector('#done-list [data-step="bridge"]').dataset.done = bridgeRunning ? '1' : '0';
     refreshButtons();
 }

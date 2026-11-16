@@ -26,6 +26,15 @@
 <label>服務<select name="provider"><option value="ollama">Ollama</option><option value="openai">OpenAI-compatible</option></select></label>
 <label>網址<input name="endpoint" type="url" value="http://127.0.0.1:11434" required></label>
 <label>模型名稱<input name="model" placeholder="輸入服務已安裝的模型名稱" required maxlength="200"></label>
+<details class="advanced">
+<summary>進階：回覆長度與上下文</summary>
+<div class="grid3">
+<label>回覆上限（tokens）<input name="max_tokens" type="number" inputmode="numeric" min="16" max="32768" step="1" value="512"></label>
+<label>上下文預算（tokens）<input name="context_budget" type="number" inputmode="numeric" min="1024" max="1048576" step="512" value="8192"></label>
+<label>溫度<input name="temperature" type="number" min="0" max="2" step="0.05" value="0.7"></label>
+</div>
+<p class="hint">回覆被切斷就把上限調高（512 約 380 個中文字）；角色卡很長、出現「超過上下文預算」時把預算調高，或降低回覆上限。這些數字也會寫進 <code>config.local.json</code>，Discord 自動回覆沿用同一組。</p>
+</details>
 <button class="primary" type="submit">套用設定</button>
 </fieldset>
 </form>
@@ -79,6 +88,7 @@
 <ul id="setup-warnings" class="warnings" hidden></ul>
 <div class="bridge">
 <p class="state">自動回覆：<span id="bridge-state">未啟動</span></p>
+<p class="state" id="bridge-failed" hidden></p>
 <pre id="bridge-log" aria-label="自動回覆輸出" hidden></pre>
 </div>
 <details id="config-box" hidden><summary>設定檔預覽（憑證已遮蔽）</summary><pre id="config-preview"></pre></details>

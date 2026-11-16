@@ -35,6 +35,15 @@ export function slugify(name) {
     return slug;
 }
 
+function modelInteger(value, fallback, { min, max, label }) {
+    if (value === undefined || value === null || String(value).trim() === '') return fallback;
+    const number = Number(value);
+    if (!Number.isInteger(number) || number < min || number > max) {
+        throw new SetupError(`${label}須為 ${min} 到 ${max} 的整數。`);
+    }
+    return number;
+}
+
 function cardPathFor(cardDir, slug, card) {
     for (let index = 1; index <= 99; index += 1) {
         const candidate = path.join(cardDir, index === 1 ? `${slug}.json` : `${slug}-${index}.json`);
@@ -101,6 +110,21 @@ export function writeSetup({
     }
     const endpoint = endpointUrl.href.replace(/\/+$/, '');
 
+    // Reply length and context were fixed defaults before; the page now sets them
+    // and the bridge reads the same numbers from config.local.json.
+    const maxTokens = modelInteger(model?.maxTokens, DEFAULTS.model.maxTokens, { min: 16, max: 32768, label: '回覆上限' });
+    const contextBudget = modelInteger(model?.contextBudget, DEFAULTS.model.contextBudget, { min: 1024, max: 1048576, label: '上下文預算' });
+    if (contextBudget < maxTokens + 64) {
+        throw new SetupError('上下文預算必須大於回覆上限，至少多 64 tokens。');
+    }
+    let temperature = DEFAULTS.model.temperature;
+    if (model?.temperature !== undefined && model?.temperature !== null && String(model.temperature).trim() !== '') {
+        temperature = Number(model.temperature);
+        if (!Number.isFinite(temperature) || temperature < 0 || temperature > 2) {
+            throw new SetupError('溫度須為 0 到 2 之間的數字。');
+        }
+    }
+
     const mode = bridge.mode === 'prefix' ? 'prefix' : 'natural';
     const rawAllowUserIds = bridge.allowUserIds ?? [];
     if (!Array.isArray(rawAllowUserIds)) throw new SetupError('允許的使用者清單格式錯誤。');
@@ -151,6 +175,9 @@ export function writeSetup({
             provider,
             endpoint,
             model: modelName,
+            maxTokens,
+            contextBudget,
+            temperature,
         },
         prompt: { ...DEFAULTS.prompt },
         worldInfo: { ...DEFAULTS.worldInfo },

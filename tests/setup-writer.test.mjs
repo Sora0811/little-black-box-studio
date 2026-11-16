@@ -74,8 +74,7 @@ test('validation happens before any file is written', async (t) => {
     assert.equal(existsSync(path.join(projectDir, 'data', 'cards')), false, 'a rejected setup creates no card');
 });
 
-test('the token file is private and the preview masks secrets', async (t) => {
-    const projectDir = project(t);
+test('the token file is private and the preview masks secrets', async (t) => {    const projectDir = project(t);
     const result = writeSetup({
         projectDir,
         ...input({ discord: { webhookUrl: WEBHOOK, channelId: CHANNEL, botToken: 'bot-token-value' } }),
@@ -95,4 +94,22 @@ test('the token file is private and the preview masks secrets', async (t) => {
 
     const files = readdirSync(path.join(projectDir, 'data', 'cards'));
     assert.deepEqual(files.sort(), ['栗燈.json'], 'no world file is written when there is no world book');
+});
+
+test('reply length, context and temperature from the page reach the config file', async (t) => {
+    const projectDir = project(t);
+    const withModel = (extra) => input({
+        model: { provider: 'ollama', endpoint: 'http://127.0.0.1:11434', model: 'mock', ...extra },
+    });
+
+    const result = writeSetup({ projectDir, ...withModel({ maxTokens: 1024, contextBudget: 16384, temperature: 0.9 }) });
+    const config = JSON.parse(readFileSync(result.configPath, 'utf8'));
+    assert.equal(config.model.maxTokens, 1024);
+    assert.equal(config.model.contextBudget, 16384);
+    assert.equal(config.model.temperature, 0.9);
+
+    assert.throws(() => writeSetup({ projectDir, ...withModel({ maxTokens: 0 }) }), /回覆上限/);
+    assert.throws(() => writeSetup({ projectDir, ...withModel({ contextBudget: 4096, maxTokens: 4096 }) }), /上下文預算/);
+    assert.throws(() => writeSetup({ projectDir, ...withModel({ temperature: 3 }) }), /溫度/);
+    assert.equal(JSON.parse(readFileSync(result.configPath, 'utf8')).model.maxTokens, 1024, 'a rejected setup leaves the old config alone');
 });

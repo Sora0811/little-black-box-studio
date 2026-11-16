@@ -17,6 +17,7 @@ import { estimateTokens } from '../src/token-estimate.js';
 import { sanitizeMentions, truncateForDiscord } from '../src/mentions.js';
 import { readCardFromPng, loadCard } from '../src/card.js';
 import { normalizeBook, activateWorldInfo } from '../src/worldbook.js';
+import { buildPrompt } from '../src/prompt.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = path.join(ROOT, 'src', 'cli.js');
@@ -116,6 +117,28 @@ function writeConfig(dir, overrides = {}) {
 }
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'rp-engine-test-'));
+
+await test('buildPrompt places post_history after history and before user', () => {
+    const card = loadCard(CARD_JSON);
+    const config = {
+        character: { userName: 'User' },
+        model: { contextBudget: 4096, maxTokens: 200 },
+        prompt: { includeFirstMessage: true, includeExamples: false, postHistoryInstructions: 'Stay in character.' },
+        worldInfo: { enabled: false },
+    };
+    const history = [
+        { role: 'user', content: 'hello there' },
+        { role: 'assistant', content: 'greetings' },
+    ];
+    const { detail } = buildPrompt({ card, book: null, history, userMessage: 'next', config });
+    const segments = detail.map((message) => message.meta?.segment);
+    const lastHistory = segments.lastIndexOf('history');
+    const postHistory = segments.indexOf('post_history');
+    const user = segments.indexOf('user');
+    assert.ok(postHistory > lastHistory, `post_history (${postHistory}) not after history (${lastHistory})`);
+    assert.equal(postHistory + 1, user, 'post_history not immediately before user');
+    return segments.join(', ');
+});
 
 // ---------------------------------------------------------------- mock model
 let modelReply = 'Seraphina: *she smiles* The forest remembers you. @everyone <@123456789012345678>';

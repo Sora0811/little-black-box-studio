@@ -11,6 +11,7 @@ import { createBridgeSupervisor } from '../src/bridge-supervisor.js';
 import { cardPng } from './fixtures/png.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const TOKEN = 'test-token';
 
 async function start(t, server) {
     server.listen(0, '127.0.0.1');
@@ -20,16 +21,18 @@ async function start(t, server) {
 }
 
 test('Web workspace serves UI, accepts cards and guards local endpoints', async (t) => {
-    const origin = await start(t, createStudio());
+    const origin = await start(t, createStudio({ apiToken: TOKEN }));
     const page = await fetch(origin);
     assert.match(await page.text(), /網頁試聊/);
+    const signed = await fetch(origin + '/?token=' + TOKEN);
+    assert.match(signed.headers.get('set-cookie') ?? '', /lbb=/, 'the printed URL hands the session key to the browser');
     assert.match(page.headers.get('content-security-policy'), /frame-ancestors 'none'/);
     for (const asset of ['/app.js', '/style.css', '/sample.json']) {
         assert.equal((await fetch(origin + asset)).status, 200);
     }
     assert.equal((await fetch(origin + '/config.json')).status, 404);
-    assert.equal((await fetch(origin + '/api/health')).status, 200);
-    const headers = { origin, 'Content-Type': 'application/json' };
+    assert.equal((await fetch(origin + '/api/health', { headers: { 'x-studio-token': TOKEN } })).status, 200);
+    const headers = { origin, 'Content-Type': 'application/json', 'x-studio-token': TOKEN };
     const sample = { spec: 'chara_card_v2', data: { name: 'Example', description: 'Fictional.' } };
     const body = JSON.stringify(sample);
     assert.equal((await fetch(origin + '/api/import', { method: 'POST', headers: { ...headers, origin: 'https://example.test' }, body })).status, 403);
@@ -39,17 +42,17 @@ test('Web workspace serves UI, accepts cards and guards local endpoints', async 
     assert.deepEqual((await json.json()).card, sample);
     for (const keyword of ['chara', 'ccv3']) {
         const png = await fetch(origin + '/api/import', {
-            method: 'POST', headers: { origin, 'Content-Type': 'image/png' }, body: cardPng(sample, keyword),
+            method: 'POST', headers: { origin, 'Content-Type': 'image/png', 'x-studio-token': TOKEN }, body: cardPng(sample, keyword),
         });
         assert.deepEqual((await png.json()).card, sample);
     }
 });
 
 test('Local endpoints accept localhost and refuse a foreign Host or body type', async (t) => {
-    const origin = await start(t, createStudio());
+    const origin = await start(t, createStudio({ apiToken: TOKEN }));
     const { port } = new URL(origin);
     const get = (host) => new Promise((resolve, reject) => {
-        const req = httpRequest({ host: '127.0.0.1', port, path: '/api/health', headers: { host } }, (res) => {
+        const req = httpRequest({ host: '127.0.0.1', port, path: '/api/health', headers: { host, 'x-studio-token': TOKEN } }, (res) => {
             res.resume();
             res.on('end', () => resolve(res.statusCode));
         });
@@ -61,9 +64,13 @@ test('Local endpoints accept localhost and refuse a foreign Host or body type', 
     assert.equal(await get(`localhost:${port}`), 200, 'the printed localhost address works');
     assert.equal(await get(`evil.test:${port}`), 403);
 
+    const denied = await fetch(origin + '/api/health');
+    assert.equal(denied.status, 401, 'a local program without the session key cannot call the API');
+    assert.match((await denied.json()).error, /token/);
+
     const wrongType = await fetch(origin + '/api/setup', {
         method: 'POST',
-        headers: { origin, 'Content-Type': 'text/plain' },
+        headers: { origin, 'Content-Type': 'text/plain', 'x-studio-token': TOKEN },
         body: '{}',
     });
     assert.equal(wrongType.status, 415, 'a form post is not mistaken for JSON');
@@ -85,10 +92,10 @@ test('Web chat uses both providers, activates lore, persists and resets turns', 
             ? { message: { content: '栗燈: 晚安。' } }
             : { choices: [{ message: { content: '早安。' } }] }));
     }));
-    const origin = await start(t, createStudio({ historyDir: dir }));
+    const origin = await start(t, createStudio({ historyDir: dir, apiToken: TOKEN }));
     const post = (route, body, url = origin) => fetch(url + '/api/' + route, {
         method: 'POST',
-        headers: { origin: url, 'Content-Type': 'application/json' },
+        headers: { origin: url, 'Content-Type': 'application/json', 'x-studio-token': TOKEN },
         body: JSON.stringify(body),
     });
     const card = (await (await fetch(origin + '/sample.json')).json());
@@ -105,7 +112,7 @@ test('Web chat uses both providers, activates lore, persists and resets turns', 
     assert.match(JSON.stringify(requests[0].body.messages), /東側礁道/);
     assert.equal(requests[0].url, '/api/chat');
 
-    const restart = await start(t, createStudio({ historyDir: dir }));
+    const restart = await start(t, createStudio({ historyDir: dir, apiToken: TOKEN }));
     assert.equal((await (await post('history', input, restart)).json()).messages.length, 3);
     const openai = { ...input, model: { ...input.model, provider: 'openai' } };
     assert.equal((await post('chat', openai)).status, 200);
@@ -120,6 +127,41 @@ test('Web chat uses both providers, activates lore, persists and resets turns', 
     const reset = await post('reset', input);
     assert.equal((await reset.json()).messages.length, 1);
     assert.equal((await (await post('history', input)).json()).messages.length, 1);
+});
+
+test('Reply length, context and temperature are adjustable from the page', async (t) => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'lbb-web-limits-'));
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    const requests = [];
+    const modelEndpoint = await start(t, createServer(async (req, res) => {
+        let body = '';
+        for await (const chunk of req) body += chunk;
+        requests.push(JSON.parse(body));
+        res.end(JSON.stringify({ message: { content: '好。' } }));
+    }));
+    const origin = await start(t, createStudio({ historyDir: dir, apiToken: TOKEN }));
+    const post = (route, body) => fetch(origin + '/api/' + route, {
+        method: 'POST',
+        headers: { origin, 'Content-Type': 'application/json', 'x-studio-token': TOKEN },
+        body: JSON.stringify(body),
+    });
+    const card = await (await fetch(origin + '/sample.json')).json();
+    const base = {
+        card,
+        world: null,
+        model: { provider: 'ollama', endpoint: modelEndpoint, model: 'mock', maxTokens: 900, contextBudget: 16384, temperature: 1.1 },
+        message: '嗨',
+    };
+
+    assert.equal((await post('chat', base)).status, 200);
+    assert.equal(requests[0].options.num_predict, 900, 'the reply limit reaches the provider');
+    assert.equal(requests[0].options.temperature, 1.1);
+
+    assert.equal((await post('history', { ...base, model: { ...base.model, maxTokens: 0 } })).status, 400);
+    const tooSmall = await post('history', { ...base, model: { ...base.model, maxTokens: 16000, contextBudget: 8192 } });
+    assert.equal(tooSmall.status, 400);
+    assert.match((await tooSmall.json()).error, /上下文預算/);
+    assert.equal((await post('history', { ...base, model: { ...base.model, temperature: 9 } })).status, 400);
 });
 
 test('Setup guide checks Discord read-only and writes a usable config', async (t) => {
@@ -153,17 +195,18 @@ test('Setup guide checks Discord read-only and writes a usable config', async (t
         historyDir: path.join(projectDir, 'web-history'),
         discordBaseUrl: discord,
         supervisor,
+        apiToken: TOKEN,
     }));
 
     const post = (route, body) => fetch(`${origin}/api/${route}`, {
         method: 'POST',
-        headers: { origin, 'Content-Type': 'application/json' },
+        headers: { origin, 'Content-Type': 'application/json', 'x-studio-token': TOKEN },
         body: JSON.stringify(body),
     });
 
     const crossOrigin = await fetch(`${origin}/api/discord/webhook`, {
         method: 'POST',
-        headers: { origin: 'https://example.test', 'Content-Type': 'application/json' },
+        headers: { origin: 'https://example.test', 'Content-Type': 'application/json', 'x-studio-token': TOKEN },
         body: JSON.stringify({ url: `https://discord.com/api/webhooks/${WEBHOOK_ID}/${WEBHOOK_TOKEN}` }),
     });
     assert.equal(crossOrigin.status, 403, 'the new routes keep the origin guard');
@@ -205,7 +248,7 @@ test('Setup guide checks Discord read-only and writes a usable config', async (t
 
     const started = await (await post('bridge/start', {})).json();
     assert.equal(started.bridge.status, 'running');
-    const status = await (await fetch(origin + '/api/bridge')).json();
+    const status = await (await fetch(origin + '/api/bridge', { headers: { 'x-studio-token': TOKEN } })).json();
     assert.equal(status.status, 'running');
 
     const savedWhileRunning = readFileSync(configPath, 'utf8');
