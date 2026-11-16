@@ -68,12 +68,14 @@ export function buildPrompt({ card, book, history, userMessage, config }) {
         fixed.push({ role: 'system', content: `Example dialogue:\n${substituteMacros(card.examples, { char: card.name, user: config.character.userName })}`, meta: { segment: 'examples' } });
     }
 
-    if (config.prompt.postHistoryInstructions) {
-        fixed.push({ role: 'system', content: substituteMacros(config.prompt.postHistoryInstructions, { char: card.name, user: config.character.userName }), meta: { segment: 'post_history' } });
-    }
+    const postHistory = config.prompt.postHistoryInstructions
+        ? { role: 'system', content: substituteMacros(config.prompt.postHistoryInstructions, { char: card.name, user: config.character.userName }), meta: { segment: 'post_history' } }
+        : null;
 
     const userTurn = { role: 'user', content: userMessage, meta: { segment: 'user' } };
-    const fixedTokens = fixed.reduce((sum, message) => sum + estimateTokens(message.content) + 4, 0) + estimateTokens(userMessage) + 4;
+    const fixedTokens = fixed.reduce((sum, message) => sum + estimateTokens(message.content) + 4, 0)
+        + (postHistory ? estimateTokens(postHistory.content) + 4 : 0)
+        + estimateTokens(userMessage) + 4;
     let remaining = contextBudget - reserved - fixedTokens;
 
     const kept = [];
@@ -90,7 +92,7 @@ export function buildPrompt({ card, book, history, userMessage, config }) {
         kept.unshift({ role: message.role, content: message.content, meta: { segment: 'history' } });
     }
 
-    const messages = [...fixed, ...kept, userTurn];
+    const messages = [...fixed, ...kept, ...(postHistory ? [postHistory] : []), userTurn];
 
     return {
         messages: messages.map(({ meta, ...message }) => message),
