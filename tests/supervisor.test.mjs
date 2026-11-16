@@ -54,8 +54,50 @@ test('supervisor starts, reports logs, refuses a second start and stops', async 
     assert.equal(stopped.lastError, null, 'an intentional stop is not an error');
 });
 
-test('supervisor refuses a missing config and explains a lock conflict', async (t) => {
+test('supervisor adds queue counters from the active config and survives a bad reader', async (t) => {
+    const { EventEmitter } = await import('node:events');
+    const fakeSpawn = () => {
+        const proc = new EventEmitter();
+        proc.stdout = new EventEmitter();
+        proc.stderr = new EventEmitter();
+        proc.pid = 4242;
+        proc.kill = () => {};
+        return proc;
+    };
     const { dir, configPath } = fixture(t);
+    let asked = null;
+    const supervisor = createBridgeSupervisor({
+        projectDir: dir,
+        script: SCRIPT,
+        spawnImpl: fakeSpawn,
+        readQueue: (active) => {
+            asked = active;
+            return { pending: 2, failedPending: 1, failedMessages: [{ reason: 'delivery_failed' }] };
+        },
+    });
+    t.after(() => supervisor.stopSync());
+
+    assert.equal(supervisor.status().pending, undefined, 'nothing is read before a config is used');
+
+    supervisor.start(configPath);
+    assert.equal(supervisor.status().pending, 2);
+    assert.equal(supervisor.status().failedPending, 1);
+    assert.equal(supervisor.status().failedMessages[0].reason, 'delivery_failed');
+    assert.equal(asked, path.resolve(configPath));
+
+    const broken = createBridgeSupervisor({
+        projectDir: dir,
+        script: SCRIPT,
+        spawnImpl: fakeSpawn,
+        readQueue: () => { throw new Error('unreadable config'); },
+    });
+    t.after(() => broken.stopSync());
+    broken.start(configPath);
+    assert.equal(broken.status().status, 'running');
+    assert.equal(broken.status().pending, undefined, 'a bad reader leaves the status intact');
+});
+
+test('supervisor refuses a missing config and explains a lock conflict', async (t) => {    const { dir, configPath } = fixture(t);
     const supervisor = createBridgeSupervisor({ projectDir: dir, script: SCRIPT });
     t.after(() => supervisor.stopSync());
 

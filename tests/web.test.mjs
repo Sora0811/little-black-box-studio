@@ -25,6 +25,8 @@ test('Web workspace serves UI, accepts cards and guards local endpoints', async 
     const page = await fetch(origin);
     assert.match(await page.text(), /網頁試聊/);
     const signed = await fetch(origin + '/?token=' + TOKEN);
+    assert.equal(signed.status, 200, 'the printed URL still serves the page');
+    assert.match(await signed.text(), /網頁試聊/);
     assert.match(signed.headers.get('set-cookie') ?? '', /lbb=/, 'the printed URL hands the session key to the browser');
     assert.match(page.headers.get('content-security-policy'), /frame-ancestors 'none'/);
     for (const asset of ['/app.js', '/style.css', '/sample.json']) {

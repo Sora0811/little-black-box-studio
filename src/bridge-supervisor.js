@@ -25,6 +25,8 @@ export function createBridgeSupervisor({
     script = null,
     spawnImpl = spawn,
     logLimit = MAX_LINES,
+    // Optional: returns queue counters for the page, keyed by the active config.
+    readQueue = null,
 } = {}) {
     const scriptPath = script ?? path.join(projectDir, 'tools', 'bridge.mjs');
     let child = null;
@@ -32,6 +34,7 @@ export function createBridgeSupervisor({
     let lastExit = null;
     let lastError = null;
     let stopping = false;
+    let activeConfigPath = null;
     const lines = [];
 
     function push(stream, chunk) {
@@ -54,6 +57,7 @@ export function createBridgeSupervisor({
         lastError = null;
         lastExit = null;
         stopping = false;
+        activeConfigPath = resolved;
         lines.length = 0;
 
         const proc = spawnImpl(process.execPath, [scriptPath, '--config', resolved], {
@@ -130,6 +134,15 @@ export function createBridgeSupervisor({
     }
 
     function status() {
+        let queue = {};
+        if (readQueue && activeConfigPath) {
+            try {
+                queue = { pending: 0, failedPending: 0, failedMessages: [], ...readQueue(activeConfigPath) };
+            } catch {
+                // A half-written or edited config must not break the page.
+                queue = {};
+            }
+        }
         return {
             status: running() ? 'running' : 'stopped',
             pid: child?.pid ?? null,
@@ -138,6 +151,7 @@ export function createBridgeSupervisor({
             lastExit,
             lastError,
             logs: lines.slice(-80),
+            ...queue,
         };
     }
 

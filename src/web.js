@@ -1,11 +1,11 @@
 import { createServer } from 'node:http';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { normalizeCard, readCardFromPng } from './card.js';
-import { DEFAULTS, modelApiKeyFor } from './config.js';
+import { DEFAULTS, loadConfig, modelApiKeyFor } from './config.js';
 import { mergeBooks } from './worldbook.js';
 import { buildPrompt } from './prompt.js';
 import { generateReply, ModelError } from './model.js';
@@ -33,6 +33,26 @@ class InputError extends Error {
 function json(res, status, body) {
     res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify(body));
+}
+
+/**
+ * Queue counters for the page: pending deliveries, abandoned `.failed` files and
+ * the last few retired messages. Paths come from the same config the bridge reads.
+ */
+function readBridgeQueue(configPath) {
+    const { config, configDir } = loadConfig(configPath);
+    const bridgeCfg = { ...DEFAULTS.bridge, ...(config.bridge ?? {}) };
+    const pendingDir = path.resolve(configDir, bridgeCfg.pendingDir);
+    const statePath = path.resolve(configDir, bridgeCfg.stateFile);
+    const names = existsSync(pendingDir) ? readdirSync(pendingDir) : [];
+    const state = existsSync(statePath)
+        ? JSON.parse(readFileSync(statePath, 'utf8').replace(/^\uFEFF/, ''))
+        : null;
+    return {
+        pending: names.filter((name) => name.endsWith('.json')).length,
+        failedPending: names.filter((name) => name.includes('.failed')).length,
+        failedMessages: (state?.failed ?? []).slice(-5),
+    };
 }
 
 async function readBody(req) {
@@ -133,7 +153,7 @@ export function createStudio({
     apiToken = randomBytes(24).toString('base64url'),
 } = {}) {
     const discord = checker ?? createDiscordChecker({ baseUrl: discordBaseUrl });
-    const bridge = supervisor ?? createBridgeSupervisor({ projectDir });
+    const bridge = supervisor ?? createBridgeSupervisor({ projectDir, readQueue: readBridgeQueue });
     const configPath = path.join(projectDir, 'config.local.json');
     let busy = false;
 
@@ -161,7 +181,8 @@ export function createStudio({
         }
         // The printed URL carries ?token=; match it once and keep it in a cookie
         // so a reload, or a second tab at "/", still works without the query.
-        const queryToken = new URL(req.url, origin).searchParams.get('token');
+        const { pathname, searchParams } = new URL(req.url, origin);
+        const queryToken = searchParams.get('token');
         if (queryToken && sameToken(queryToken)) {
             res.setHeader('Set-Cookie', `lbb=${encodeURIComponent(apiToken)}; HttpOnly; SameSite=Strict; Path=/`);
         }
@@ -171,8 +192,8 @@ export function createStudio({
             return json(res, 401, { error: '工作階段金鑰不符。請使用啟動視窗顯示、帶 token 的網址重新開啟頁面。' });
         }
         try {
-            if (req.method === 'GET' && assets.has(req.url)) {
-                const [body, type] = assets.get(req.url);
+            if (req.method === 'GET' && assets.has(pathname)) {
+                const [body, type] = assets.get(pathname);
                 res.writeHead(200, { 'Content-Type': type + '; charset=utf-8' });
                 return res.end(body);
             }
