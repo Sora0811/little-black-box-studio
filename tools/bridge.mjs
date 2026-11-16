@@ -96,6 +96,7 @@ function makeBridge(ctx, { selfUserId, api: providedApi = null }) {
     // Keep the character's own prompt fields consistent with the web chat.
     if (card.systemPrompt) config.prompt.systemPrompt = card.systemPrompt;
     if (card.postHistoryInstructions) config.prompt.postHistoryInstructions = card.postHistoryInstructions;
+    config.prompt.includeExamples = true; // the web chat enables it too
     const { token, source } = readDiscordToken(configDir, config, bridgeCfg);
     if (!token && !providedApi) {
         throw new Error('找不到 Discord bot token（設 DISCORD_BOT_TOKEN，或讓 bridge.botTokenFile / discord.tokenFile 指向含 DISCORD_TOKEN 的檔案）');
@@ -150,6 +151,9 @@ async function main() {
         const pendingFiles = fs.existsSync(paths.pendingDir)
             ? fs.readdirSync(paths.pendingDir).filter((name) => name.endsWith('.json'))
             : [];
+        const failedFiles = fs.existsSync(paths.pendingDir)
+            ? fs.readdirSync(paths.pendingDir).filter((name) => name.includes('.failed'))
+            : [];
         print({
             provider: ctx.config.discord.provider,
             webhookSource: ctx.config.discord.webhookSource,
@@ -162,6 +166,8 @@ async function main() {
             lastMessageId: state?.lastMessageId ?? null,
             processedTracked: state?.processed?.length ?? 0,
             pending: pendingFiles.length,
+            failedPending: failedFiles.length,
+            failedMessages: (state?.failed ?? []).slice(-5),
             lock: readLock(paths.lockFile),
             stateFile: paths.statePath,
             pendingDir: paths.pendingDir,

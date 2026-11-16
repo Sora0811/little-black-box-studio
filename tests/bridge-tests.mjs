@@ -327,7 +327,7 @@ await test('a timed-out delivery is confirmed in the channel and not resent', as
 
     assert.equal(calls.sends.length, 1, 'no second post after a confirmed delivery');
     assert.equal(report.replies[0].verified, true);
-    assert.equal(historyOf(config).length, 2);
+    assert.equal(historyOf(config).length, 3, 'greeting, then the committed turn');
     return 'verified once, history committed once';
 });
 
@@ -340,15 +340,16 @@ await test('a failed delivery keeps one pending record and resends the same text
     const failing = makeHarness({
         world,
         config,
-        sendImpl: () => { throw new DeliveryError('unauthorized', { code: 'DELIVERY_FAILED', status: 401 }); },
+        sendImpl: () => { throw new DeliveryError('server error', { code: 'DELIVERY_FAILED', status: 503 }); },
     });
     failing.bridge.state.lastMessageId = '1500000000000000000';
     const first = await failing.bridge.pollOnce();
 
     assert.equal(first.stopped, true);
-    assert.equal(failing.calls.sends.length, 2, 'one attempt plus one retry');
+    assert.equal(failing.calls.sends.length, 1, 'one attempt per cycle, retried later instead of hammering');
     const pending = failing.bridge.pending();
     assert.equal(pending.length, 1);
+    assert.equal(pending[0].payload.attempts, 1, 'the attempt count is stored with the pending record');
     const cursorAfterFailure = failing.bridge.state.lastMessageId;
 
     const recovering = makeHarness({ world, config });
@@ -358,8 +359,87 @@ await test('a failed delivery keeps one pending record and resends the same text
     assert.equal(recovering.calls.sends[0], pending[0].payload.content, 'the pending text is resent verbatim');
     assert.equal(recovering.calls.generates, 0, 'no new generation for the pending record');
     assert.equal(recovering.bridge.pending().length, 0);
-    assert.equal(historyOf(config).length, 2);
+    assert.equal(historyOf(config).length, 3, 'greeting, then the resent turn');
     return `cursor ${cursorAfterFailure} kept, resend without regenerating`;
+});
+
+await test('a permanent delivery error is not retried and keeps the text as .failed', async () => {
+    const dir = freshDir();
+    const config = unitConfig(dir);
+    const world = createWorld();
+    world.post({ content: '!devil 權限不足' });
+
+    const harness = makeHarness({
+        world,
+        config,
+        sendImpl: () => { throw new DeliveryError('unauthorized', { code: 'DELIVERY_FAILED', status: 401 }); },
+    });
+    harness.bridge.state.lastMessageId = '1500000000000000000';
+    const report = await harness.bridge.pollOnce();
+
+    assert.equal(harness.calls.sends.length, 1, 'a 401 will fail the same way forever');
+    assert.equal(harness.bridge.pending().length, 0, 'the queue is not blocked by a hopeless retry');
+    const failed = fs.readdirSync(path.join(dir, 'pending')).filter((name) => name.includes('.failed'));
+    assert.equal(failed.length, 1, 'the text is kept for inspection');
+    assert.equal(harness.bridge.status().failedPending, 1);
+    assert.equal(report.replies[0].error, 'delivery_failed');
+    return 'one attempt, then abandoned';
+});
+
+await test('a retryable delivery error is abandoned after the attempt limit', async () => {
+    const dir = freshDir();
+    const config = unitConfig(dir);
+    const world = createWorld();
+    world.post({ content: '!devil 一直 503' });
+
+    const harness = makeHarness({
+        world,
+        config,
+        sendImpl: () => { throw new DeliveryError('server error', { code: 'DELIVERY_FAILED', status: 503 }); },
+    });
+    harness.bridge.state.lastMessageId = '1500000000000000000';
+    for (let cycle = 0; cycle < 5; cycle += 1) await harness.bridge.pollOnce();
+
+    assert.equal(harness.calls.sends.length, 5, 'retries are bounded, not endless');
+    assert.equal(harness.bridge.pending().length, 0);
+    assert.equal(harness.bridge.status().failedPending, 1);
+    const after = await harness.bridge.pollOnce();
+    assert.equal(harness.calls.sends.length, 5, 'the abandoned text is never posted again');
+    assert.equal(after.stopped, false, 'the next cycle is free to answer new messages');
+    return 'stopped after 5 attempts';
+});
+
+await test('a message the model cannot answer is retired instead of retried forever', async () => {
+    const dir = freshDir();
+    const config = unitConfig(dir);
+    const world = createWorld();
+    world.post({ content: '!devil 第一則' });
+    world.post({ content: '!devil 第二則' });
+
+    let generatesLeft = 3;    const harness = makeHarness({
+        world,
+        config,
+        generateImpl: () => {
+            if (generatesLeft > 0) {
+                generatesLeft -= 1;
+                throw Object.assign(new Error('model down'), { code: 'MODEL_UNREACHABLE' });
+            }
+            return { text: '終於回覆', provider: 'mock', model: 'mock', elapsedMs: 1, usage: {}, finishReason: 'stop' };
+        },
+    });
+    harness.bridge.state.lastMessageId = '1500000000000000000';
+
+    const first = await harness.bridge.pollOnce();
+    const second = await harness.bridge.pollOnce();
+    const third = await harness.bridge.pollOnce();
+
+    assert.equal(first.stopped, true);
+    assert.equal(second.stopped, true);
+    assert.equal(third.stopped, false, 'the retired message does not block the batch');
+    assert.equal(third.failed, 1);
+    assert.equal(harness.bridge.status().failedMessages.length, 1);
+    assert.equal(harness.calls.sends.length, 1, 'the second message still gets answered');
+    return `retired after ${harness.calls.generates - 1} attempts, then answered`;
 });
 
 await test('changing the channel starts a fresh cursor instead of answering the old channel', async () => {
@@ -399,7 +479,7 @@ await test('a pending reply is never sent after the channel or character changes
     const failing = makeHarness({
         world,
         config,
-        sendImpl: () => { throw new DeliveryError('unauthorized', { code: 'DELIVERY_FAILED', status: 401 }); },
+        sendImpl: () => { throw new DeliveryError('server error', { code: 'DELIVERY_FAILED', status: 503 }); },
     });
     failing.bridge.state.lastMessageId = '1500000000000000000';
     await failing.bridge.pollOnce();
@@ -429,7 +509,7 @@ await test('a pending reply is never sent after the channel or character changes
     const sameChannel = makeHarness({ world, config: otherCharacter });
     const again = await sameChannel.bridge.pollOnce();
     assert.equal(again.pending.skipped, 1, 'a pending reply for another character is retired');
-    assert.equal(sameChannel.calls.sends.length, 0);
+    assert.ok(!sameChannel.calls.sends.includes('舊角色的回覆'), 'the old character text is never posted');
     return 'stale pending retired, no cross-channel send';
 });
 
@@ -492,6 +572,70 @@ await test('bridge config rejects an invalid mode and empty allow list', async (
     assert.throws(() => resolveBridgeConfig({ bridge: { mode: 'sometimes', allowUserIds: [USER], channelId: CHANNEL } }), /mode/);
     assert.throws(() => resolveBridgeConfig({ bridge: { mode: 'prefix', allowUserIds: [], channelId: CHANNEL } }), /allowUserIds/);
     return 'validation active';
+});
+
+await test('a bridge reply prompt includes the card example text', async () => {
+    const dir = freshDir();
+    const config = unitConfig(dir);
+    config.prompt.includeExamples = true;
+    const previousExamples = card.examples;
+    card.examples = 'EXAMPLE_TEXT_UNIQUE';
+    try {
+        const world = createWorld();
+        world.post({ content: '!devil hello' });
+        let captured = null;
+        const { bridge } = makeHarness({
+            world,
+            config,
+            generateImpl: (params) => {
+                captured = params.messages;
+                return { text: 'reply', provider: 'mock', model: 'mock', elapsedMs: 1, usage: {}, finishReason: 'stop' };
+            },
+        });
+        bridge.state.lastMessageId = '1500000000000000000';
+        await bridge.pollOnce();
+        const joined = (captured ?? []).map((message) => message.content).join('\n');
+        assert.ok(joined.includes('EXAMPLE_TEXT_UNIQUE'), 'example text missing from prompt messages');
+        return 'example text present';
+    } finally {
+        card.examples = previousExamples;
+    }
+});
+
+await test('the first bridge reply seeds firstMessage once and does not duplicate it', async () => {
+    const dir = freshDir();
+    const config = unitConfig(dir);
+    const world = createWorld();
+    world.post({ content: '!devil first' });
+    let captured1 = null;
+    const first = makeHarness({
+        world,
+        config,
+        generateImpl: (params) => {
+            captured1 = params.messages;
+            return { text: 'reply one', provider: 'mock', model: 'mock', elapsedMs: 1, usage: {}, finishReason: 'stop' };
+        },
+    });
+    first.bridge.state.lastMessageId = '1500000000000000000';
+    await first.bridge.pollOnce();
+
+    world.post({ content: '!devil second' });
+    let captured2 = null;
+    const second = makeHarness({
+        world,
+        config,
+        generateImpl: (params) => {
+            captured2 = params.messages;
+            return { text: 'reply two', provider: 'mock', model: 'mock', elapsedMs: 1, usage: {}, finishReason: 'stop' };
+        },
+    });
+    await second.bridge.pollOnce();
+
+    const countFirst = (captured1 ?? []).filter((message) => message.role === 'assistant' && message.content === card.firstMessage).length;
+    const countSecond = (captured2 ?? []).filter((message) => message.role === 'assistant' && message.content === card.firstMessage).length;
+    assert.equal(countFirst, 1, 'first reply should include firstMessage once');
+    assert.equal(countSecond, 1, 'the saved history keeps firstMessage exactly once');
+    return `first=${countFirst}, second=${countSecond}`;
 });
 
 // ---------------------------------------------------------------- CLI end-to-end

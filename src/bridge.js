@@ -16,7 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { buildPrompt } from './prompt.js';
-import { loadHistory, saveHistory, appendMessages } from './history.js';
+import { loadHistory, saveHistory, appendMessages, ensureFirstMessage } from './history.js';
 import { sanitizeMentions, truncateForDiscord } from './mentions.js';
 import { stripCharacterPrefix } from './macros.js';
 import { compareIds } from './discord-api.js';
@@ -38,6 +38,29 @@ export const BRIDGE_DEFAULTS = {
 };
 
 export const BRIDGE_MODES = ['prefix', 'natural'];
+
+// A reply is sent at most this many times, and a message the model cannot answer
+// is retired after this many cycles instead of being retried forever.
+export const MAX_DELIVERY_SENDS = 5;
+export const MAX_GENERATION_ATTEMPTS = 3;
+
+const PERMANENT_DELIVERY_STATUS = new Set([400, 401, 403, 404, 413, 415]);
+const PERMANENT_DELIVERY_CODES = new Set(['WEBHOOK_URL_INVALID', 'CONTENT_TOO_LONG', 'EMPTY_CONTENT']);
+
+/** A permanent error fails the same way forever, so retrying only burns quota. */
+export function isPermanentDeliveryError(error) {
+    if (!error) return false;
+    if (error.ambiguous === true) return false;
+    if (error.code === 'DELIVERY_TIMEOUT' || error.code === 'DELIVERY_UNREACHABLE') return false;
+    if (typeof error.status === 'number') return PERMANENT_DELIVERY_STATUS.has(error.status);
+    return PERMANENT_DELIVERY_CODES.has(error.code);
+}
+
+/** The request may have reached Discord even though the client saw an error. */
+export function isUncertainDeliveryError(error) {
+    return Boolean(error) && (error.ambiguous === true ||
+        error.code === 'DELIVERY_TIMEOUT' || error.code === 'DELIVERY_UNREACHABLE');
+}
 
 export function resolveBridgeConfig(config) {
     const raw = config.bridge ?? {};
@@ -165,6 +188,8 @@ export function createBridge({ config, card, book, api, generate, send, verify, 
     const historyId = historyMemberId ?? config.discord.memberId;
     const state = loadState(statePath, { channelId: cfg.channelId, mode: cfg.mode });
     state.mode = cfg.mode;
+    if (!state.generationFailures || typeof state.generationFailures !== 'object') state.generationFailures = {};
+    if (!Array.isArray(state.failed)) state.failed = [];
 
     const log = (level, message, data) => {
         if (logger?.[level]) logger[level](message, data);
@@ -175,12 +200,16 @@ export function createBridge({ config, card, book, api, generate, send, verify, 
     }
 
     function loadStore() {
-        return loadHistory({
+        const loaded = loadHistory({
             dir: config.history.dir,
             memberId: historyId,
             channelId: cfg.channelId,
             character: card.name,
         });
+        // The web chat seeds the greeting too; without it Discord replies read a
+        // history that starts mid-conversation, and the seed is saved with the turn.
+        ensureFirstMessage(loaded.store, card, { enabled: config.prompt.includeFirstMessage });
+        return loaded;
     }
 
     function markProcessed(messageId) {
@@ -210,6 +239,22 @@ export function createBridge({ config, card, book, api, generate, send, verify, 
             .filter((entry) => entry.payload && entry.payload.messageId && entry.payload.content);
     }
 
+    function failedPending() {
+        if (!fs.existsSync(pendingDir)) return [];
+        return fs.readdirSync(pendingDir).filter((name) => name.includes('.failed')).sort();
+    }
+
+    function describeDeliveryError(error) {
+        return { code: error?.code ?? 'UNKNOWN', status: error?.status ?? null };
+    }
+
+    /** Keep the text, but stop retrying it: `.failed` is never read back. */
+    function abandonPending(file, payload) {
+        writeJsonAtomic(file, payload);
+        const failed = file.replace(/\.json$/, '.failed');
+        fs.renameSync(file, fs.existsSync(failed) ? `${failed}.${Date.now()}` : failed);
+    }
+
     function commitTurn(message, text, content) {
         const { store } = loadStore();
         appendMessages(store, [
@@ -226,51 +271,53 @@ export function createBridge({ config, card, book, api, generate, send, verify, 
     }
 
     async function deliverWithGuards({ messageId, userMessage, content }) {
-        const pendingFile = writePending({
+        const pendingFile = pendingPath(messageId);
+        const previous = readJson(pendingFile, null);
+        const payload = {
             messageId,
             userMessage,
             content,
             channelId: cfg.channelId,
             memberId: historyId,
-            createdAt: new Date().toISOString(),
-        });
+            attempts: Number(previous?.attempts ?? 0) + 1,
+            createdAt: previous?.createdAt ?? new Date().toISOString(),
+        };
 
+        const commit = () => {
+            commitTurn({ messageId }, userMessage, content);
+            if (fs.existsSync(pendingFile)) fs.renameSync(pendingFile, `${pendingFile}.done`);
+        };
+        const giveUp = (error) => {
+            abandonPending(pendingFile, { ...payload, lastError: describeDeliveryError(error) });
+            log('error', 'Delivery abandoned; the text is kept for inspection.', {
+                ...describeDeliveryError(error),
+                attempts: payload.attempts,
+                file: pendingFile.replace(/\.json$/, '.failed'),
+            });
+            return { ok: false, reason: 'delivery_failed', abandoned: true, error: describeDeliveryError(error) };
+        };
+
+        writePending(payload);
         try {
             const delivery = await send(content);
-            commitTurn({ messageId }, userMessage, content);
-            fs.renameSync(pendingFile, `${pendingFile}.done`);
-            return { ok: true, messageId: delivery.messageId ?? null, retried: false };
+            commit();
+            return { ok: true, messageId: delivery.messageId ?? null, retried: payload.attempts > 1 };
         } catch (error) {
-            const ambiguous = error?.ambiguous === true ||
-                error?.code === 'DELIVERY_TIMEOUT' || error?.code === 'DELIVERY_UNREACHABLE';
-            if (ambiguous) {
+            if (isUncertainDeliveryError(error)) {
                 const arrived = await verify(content, messageId).catch(() => false);
                 if (arrived) {
-                    commitTurn({ messageId }, userMessage, content);
-                    fs.renameSync(pendingFile, `${pendingFile}.done`);
+                    commit();
                     log('warn', 'Delivery timed out but the message was found in the channel; not resending.');
                     return { ok: true, messageId: null, verified: true };
                 }
             }
-
-            try {
-                const retry = await send(content);
-                commitTurn({ messageId }, userMessage, content);
-                fs.renameSync(pendingFile, `${pendingFile}.done`);
-                log('warn', 'First delivery failed; the same content was sent once more.');
-                return { ok: true, messageId: retry.messageId ?? null, retried: true };
-            } catch (second) {
-                log('error', 'Delivery failed twice; keeping the pending record.', {
-                    code: second?.code ?? error?.code ?? 'UNKNOWN',
-                    status: second?.status ?? error?.status ?? null,
-                });
-                return {
-                    ok: false,
-                    reason: 'delivery_failed',
-                    error: { code: second?.code ?? error?.code ?? 'UNKNOWN', status: second?.status ?? error?.status ?? null },
-                    pendingFile,
-                };
-            }
+            if (isPermanentDeliveryError(error)) return giveUp(error);
+            if (payload.attempts >= MAX_DELIVERY_SENDS) return giveUp(error);
+            log('warn', 'Delivery failed; the same text is retried next cycle.', {
+                ...describeDeliveryError(error),
+                attempts: payload.attempts,
+            });
+            return { ok: false, reason: 'delivery_failed', error: describeDeliveryError(error), pendingFile };
         }
     }
 
@@ -369,6 +416,7 @@ export function createBridge({ config, card, book, api, generate, send, verify, 
 
             const outcome = await replyTo(message, verdict.text);
             if (outcome.ok) {
+                delete state.generationFailures[message.id];
                 report.handled += 1;
                 report.replies.push({
                     messageId: message.id,
@@ -378,8 +426,32 @@ export function createBridge({ config, card, book, api, generate, send, verify, 
                     retried: Boolean(outcome.retried),
                 });
             } else {
+                const attempts = Number(state.generationFailures[message.id] ?? 0) + 1;
+                state.generationFailures[message.id] = attempts;
+                // A message the model keeps failing on must not be retried forever:
+                // retire it after a few cycles and move on to the rest of the batch.
+                if (attempts >= MAX_GENERATION_ATTEMPTS) {
+                    delete state.generationFailures[message.id];
+                    state.failed = [...state.failed, {
+                        messageId: message.id,
+                        content: String(message.content ?? '').slice(0, 200),
+                        reason: outcome.reason ?? 'failed',
+                        attempts,
+                        at: new Date().toISOString(),
+                    }].slice(-20);
+                    markProcessed(message.id);
+                    log('error', 'Message retired after repeated failures; nothing was posted.', {
+                        messageId: message.id,
+                        reason: outcome.reason ?? 'failed',
+                        attempts,
+                    });
+                    report.failed = (report.failed ?? 0) + 1;
+                    report.replies.push({ messageId: message.id, error: outcome.reason ?? 'failed', detail: outcome.error ?? null, attempts, retired: true });
+                    continue;
+                }
+                persist();
                 report.stopped = true;
-                report.replies.push({ messageId: message.id, error: outcome.reason, detail: outcome.error ?? null });
+                report.replies.push({ messageId: message.id, error: outcome.reason ?? 'failed', detail: outcome.error ?? null, attempts });
                 break;
             }
         }
@@ -403,6 +475,8 @@ export function createBridge({ config, card, book, api, generate, send, verify, 
             lastMessageId: state.lastMessageId,
             processed: state.processed.length,
             pending: readPending().length,
+            failedPending: failedPending().length,
+            failedMessages: (state.failed ?? []).slice(-5),
             stateFile: statePath,
         }),
     };
